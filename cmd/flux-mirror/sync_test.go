@@ -411,6 +411,16 @@ func TestSync_FlagValidation(t *testing.T) {
 			wantError: "--timeout must be greater than 0",
 		},
 		{
+			name:      "rejects json log format without verbose",
+			args:      []string{"sync", "config.yaml", "--log-format", "json"},
+			wantError: "--log-format json requires --verbose",
+		},
+		{
+			name:      "rejects unknown log format",
+			args:      []string{"sync", "config.yaml", "--log-format", "xml"},
+			wantError: "unsupported log format 'xml'",
+		},
+		{
 			name: "rejects non-positive inherited root timeout",
 			args: []string{"sync", "config.yaml"},
 			setup: func(t *testing.T) {

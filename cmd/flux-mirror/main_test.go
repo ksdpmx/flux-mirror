@@ -54,6 +54,7 @@ func resetCmdArgs() {
 	versionArgs = versionFlags{output: "text"}
 	syncArgs = syncFlags{
 		output:        "text",
+		logFormat:     "text",
 		concurrency:   4,
 		timeout:       syncDefaultTimeout,
 		retries:       3,

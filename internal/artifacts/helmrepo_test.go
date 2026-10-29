@@ -4,13 +4,16 @@
 package artifacts
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	gosync "sync"
 	"testing"
 
@@ -132,6 +135,83 @@ func TestMirror_ChartToHelmRepo(t *testing.T) {
 	e = run(entry, helmOpts())
 	g.Expect(tagsWithStatus(e, apiv1.StatusOverwritten)).To(HaveLen(1))
 	g.Expect(fake.files["/helm-local/team/podinfo-1.0.0.tgz"]).To(Equal(tgz1))
+}
+
+func TestMirror_ChartToHelmRepoLogsEveryOutcome(t *testing.T) {
+	g := NewWithT(t)
+	src := repo("helm-log-src")
+	c := oci.NewClient(oci.Insecure())
+	pushChartFixture(t, c, src+":1.0.0", "1.0.0")
+	_, url := newFakeHelmRepo(t)
+	entry := chartEntry(src, url)
+
+	// run returns the log records of one sync, keyed by event.
+	run := func(entry apiv1.ArtifactEntry) map[string]map[string]any {
+		var buf bytes.Buffer
+		opts := helmOpts()
+		opts.Logger = slog.New(slog.NewJSONHandler(&buf, nil))
+		_, err := newRunner().Run(context.Background(), []sync.EntryMirror{New(c, entry, opts)})
+		g.Expect(err).ToNot(HaveOccurred())
+		events := map[string]map[string]any{}
+		for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+			var rec map[string]any
+			g.Expect(json.Unmarshal([]byte(line), &rec)).To(Succeed())
+			if ev, ok := rec["event"].(string); ok {
+				events[ev] = rec
+			}
+		}
+		return events
+	}
+
+	ev := run(entry)
+	g.Expect(ev).To(HaveKey("chart.start"))
+	done := ev["chart.done"]
+	g.Expect(done).To(HaveKeyWithValue("status", "copied"))
+	g.Expect(done).To(HaveKeyWithValue("source", src))
+	g.Expect(done).To(HaveKeyWithValue("tag", "1.0.0"))
+	g.Expect(done["destination"]).To(HaveSuffix("/helm-local/team/podinfo-1.0.0.tgz"))
+	g.Expect(done["digest"]).To(HavePrefix("sha256:"))
+	g.Expect(done).To(HaveKey("elapsed"))
+
+	// An up-to-date chart is still reported per tag, not only in the summary.
+	ev = run(entry)
+	g.Expect(ev["chart.skip"]).To(HaveKeyWithValue("reason", "destination chart is up to date"))
+	g.Expect(ev["chart.done"]).To(HaveKeyWithValue("status", "skipped"))
+}
+
+func TestMirror_ChartToHelmRepoLogsDriftAndFailure(t *testing.T) {
+	g := NewWithT(t)
+	src := repo("helm-log2-src")
+	c := oci.NewClient(oci.Insecure())
+	pushChartFixture(t, c, src+":1.0.0", "1.0.0")
+	pushChartFixture(t, c, src+":2.0.0", "1.5.0") // tag does not match chart version
+	fake, url := newFakeHelmRepo(t)
+	fake.files["/helm-local/team/podinfo-1.0.0.tgz"] = []byte("tampered")
+
+	var buf bytes.Buffer
+	opts := helmOpts()
+	opts.Logger = slog.New(slog.NewJSONHandler(&buf, nil))
+	_, err := newRunner().Run(context.Background(), []sync.EntryMirror{New(c, chartEntry(src, url), opts)})
+	g.Expect(err).ToNot(HaveOccurred())
+
+	events := map[string]map[string]any{}
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		var rec map[string]any
+		g.Expect(json.Unmarshal([]byte(line), &rec)).To(Succeed())
+		if ev, ok := rec["event"].(string); ok {
+			events[ev] = rec
+		}
+	}
+	drift := events["chart.drift"]
+	g.Expect(drift).To(HaveKeyWithValue("level", "WARN"))
+	g.Expect(drift["digest"]).To(HavePrefix("sha256:"))
+	g.Expect(drift["dst_digest"]).To(HavePrefix("sha256:"))
+	g.Expect(drift).To(HaveKey("reason"))
+
+	failed := events["chart.failed"]
+	g.Expect(failed).To(HaveKeyWithValue("level", "ERROR"))
+	g.Expect(failed).To(HaveKeyWithValue("tag", "2.0.0"))
+	g.Expect(failed["error"]).To(ContainSubstring("does not match tag"))
 }
 
 func TestMirror_ChartToHelmRepoRejectsImage(t *testing.T) {

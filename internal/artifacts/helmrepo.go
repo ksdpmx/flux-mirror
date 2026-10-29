@@ -70,8 +70,24 @@ func (m *mirror) newPusher() (*helmrepo.Pusher, error) {
 // runChartTag mirrors one OCI Helm chart tag to the Helm repository. A failure
 // (including a chart/tag version mismatch) fails only this tag. Idempotent —
 // safe to retry under the runner's per-tag budget.
-func (m *mirror) runChartTag(ctx context.Context, j tagJob) (sync.JobResult, error) {
+func (m *mirror) runChartTag(ctx context.Context, j tagJob) (res sync.JobResult, err error) {
 	start := time.Now()
+	var target string
+	// Every log line carries the same identifying fields so the stream can be
+	// filtered by source, tag, or destination in both text and JSON formats.
+	base := func() []any {
+		return []any{"source", m.entry.Source, "tag", j.tag, "destination", target}
+	}
+	defer func() {
+		elapsed := time.Since(start).Round(time.Millisecond)
+		if err != nil {
+			m.opts.Logger.Error("chart failed", append(base(),
+				"event", "chart.failed", "error", err.Error(), "elapsed", elapsed)...)
+			return
+		}
+		m.opts.Logger.Info("chart done", append(base(),
+			"event", "chart.done", "status", string(res.Status), "digest", res.Digest, "elapsed", elapsed)...)
+	}()
 
 	// Pin to the digest confirmed by verification so the bytes uploaded are the
 	// bytes whose signature was checked.
@@ -83,16 +99,16 @@ func (m *mirror) runChartTag(ctx context.Context, j tagJob) (sync.JobResult, err
 	if err != nil {
 		return sync.JobResult{}, err
 	}
-	res := sync.JobResult{Digest: chart.LayerDigest}
+	res = sync.JobResult{Digest: chart.LayerDigest}
 
 	if want := strings.ReplaceAll(j.tag, "_", "+"); chart.Version != want {
 		return res, fmt.Errorf("chart version %q in %s does not match tag %q", chart.Version, j.src, j.tag)
 	}
-	target, err := m.pusher.ChartURL(chart.Name, chart.Version)
+	target, err = m.pusher.ChartURL(chart.Name, chart.Version)
 	if err != nil {
 		return res, err
 	}
-	m.opts.Logger.Info("mirroring chart", "src", j.src, "dst", target)
+	m.opts.Logger.Info("mirroring chart", append(base(), "event", "chart.start")...)
 
 	dstDigest, err := m.pusher.Stat(ctx, chart.Name, chart.Version)
 	if err != nil {
@@ -106,12 +122,16 @@ func (m *mirror) runChartTag(ctx context.Context, j tagJob) (sync.JobResult, err
 			res.Status = apiv1.StatusWouldCopy
 		}
 	case dstDigest == chart.LayerDigest:
+		m.opts.Logger.Info("skipping chart", append(base(),
+			"event", "chart.skip", "digest", chart.LayerDigest,
+			"reason", "destination chart is up to date")...)
 		res.Status = apiv1.StatusSkipped
 		res.Reason = apiv1.ReasonUpToDate
 		return res, nil
 	case !j.overwrite:
-		m.opts.Logger.Warn("destination chart drifted from source; skipping (overwrite=false)",
-			"src", j.src, "src_digest", chart.LayerDigest, "dst", target, "dst_digest", dstDigest)
+		m.opts.Logger.Warn("destination chart drifted from source; skipping (overwrite=false)", append(base(),
+			"event", "chart.drift", "digest", chart.LayerDigest, "dst_digest", dstDigest,
+			"reason", "destination chart differs from source and overwrite is false")...)
 		res.Status = apiv1.StatusDrifted
 		return res, nil
 	default:
@@ -132,8 +152,5 @@ func (m *mirror) runChartTag(ctx context.Context, j tagJob) (sync.JobResult, err
 	if err := m.pusher.Put(ctx, chart.Name, chart.Version, body, chart.Size, chart.LayerDigest); err != nil {
 		return res, err
 	}
-	m.opts.Logger.Info("chart done",
-		"src", j.src, "dst", target, "status", string(res.Status),
-		"elapsed", time.Since(start).Round(time.Millisecond))
 	return res, nil
 }

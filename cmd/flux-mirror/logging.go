@@ -8,10 +8,24 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
+
+// jsonReplaceAttr renders every time.Duration attribute as seconds (a float
+// rounded to milliseconds) in the JSON log format. slog's JSON handler would
+// otherwise emit durations as integer nanoseconds. The attribute keys are
+// unchanged, so "elapsed" stays "elapsed" in both formats.
+func jsonReplaceAttr(_ []string, a slog.Attr) slog.Attr {
+	if a.Value.Kind() == slog.KindDuration {
+		secs := a.Value.Duration().Round(time.Millisecond).Seconds()
+		a.Value = slog.Float64Value(math.Round(secs*1000) / 1000)
+	}
+	return a
+}
 
 // plainHandler is a slog.Handler that writes lines matching the standard
 // library's log.LstdFlags format ("YYYY/MM/DD HH:MM:SS msg [key=val ...]"),

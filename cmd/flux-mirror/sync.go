@@ -71,6 +71,7 @@ destination registry is known to be immutable.`,
 
 type syncFlags struct {
 	output        flags.Output
+	logFormat     flags.LogFormat
 	concurrency   int
 	timeout       time.Duration
 	retries       int
@@ -84,6 +85,7 @@ type syncFlags struct {
 
 var syncArgs = syncFlags{
 	output:        "text",
+	logFormat:     "text",
 	concurrency:   4,
 	timeout:       syncDefaultTimeout,
 	retries:       3,
@@ -106,6 +108,7 @@ func init() {
 		"Run the plan and comparison pipeline without performing any writes.")
 	syncCmd.Flags().BoolVar(&syncArgs.verbose, "verbose", false,
 		"Log all operations and the involved digests as they are performed.")
+	syncCmd.Flags().Var(&syncArgs.logFormat, "log-format", syncArgs.logFormat.Description())
 	syncCmd.Flags().BoolVar(&syncArgs.insecure, "insecure", false,
 		"Allow plaintext HTTP and skip TLS verification (test/dev only).")
 	syncCmd.Flags().BoolVar(&syncArgs.noProgress, "no-progress", false,
@@ -137,9 +140,21 @@ func syncCmdRun(cmd *cobra.Command, args []string) error {
 	// streams are silent and only the spinner + per-job lines show.
 	var logger *slog.Logger
 	if syncArgs.verbose {
-		logger = slog.New(newPlainHandler(cmd.ErrOrStderr(), slog.LevelDebug))
-		craneLogs.Progress = log.New(cmd.ErrOrStderr(), "", log.LstdFlags)
-		craneLogs.Warn = log.New(cmd.ErrOrStderr(), "", log.LstdFlags)
+		if syncArgs.logFormat.String() == "json" {
+			h := slog.NewJSONHandler(cmd.ErrOrStderr(), &slog.HandlerOptions{
+				Level:       slog.LevelDebug,
+				ReplaceAttr: jsonReplaceAttr,
+			})
+			logger = slog.New(h)
+			// Route crane's package-global loggers through the same handler so
+			// every line on stderr is a JSON object.
+			craneLogs.Progress = slog.NewLogLogger(h, slog.LevelInfo)
+			craneLogs.Warn = slog.NewLogLogger(h, slog.LevelWarn)
+		} else {
+			logger = slog.New(newPlainHandler(cmd.ErrOrStderr(), slog.LevelDebug))
+			craneLogs.Progress = log.New(cmd.ErrOrStderr(), "", log.LstdFlags)
+			craneLogs.Warn = log.New(cmd.ErrOrStderr(), "", log.LstdFlags)
+		}
 	} else {
 		logger = slog.New(slog.DiscardHandler)
 	}
@@ -253,6 +268,9 @@ func validateSyncArgs(timeout time.Duration) error {
 	}
 	if syncArgs.driftExitCode < 0 || syncArgs.driftExitCode > syncMaxCustomDriftExitCode {
 		return fmt.Errorf("--drift-exit-code must be between 0 and %d", syncMaxCustomDriftExitCode)
+	}
+	if syncArgs.logFormat.String() == "json" && !syncArgs.verbose {
+		return fmt.Errorf("--log-format json requires --verbose")
 	}
 	return nil
 }

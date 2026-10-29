@@ -26,6 +26,32 @@ This file tracks what is still open.
 - **T2.** Unknown config fields are ignored silently (for example `name:` under
   `artifacts`, which is not a field). Consider strict decoding or a warning in
   `config.Decode`; rejecting them would break existing configs.
+- **T3.** Only the `artifacts` to Helm repo path (`destinationType:
+  artifactory`) has structured verbose logs (`event`, `source`, `tag`,
+  `destination`, `status`, `digest`, `reason`, `error`, `elapsed`). Everything
+  else still logs ad hoc fields and should move to the same schema, so that
+  `--log-format json` is uniform:
+  - `artifacts` to OCI (`internal/artifacts/mirror.go`): `mirroring tag`,
+    `tag done`, drift and referrer warnings, `signature too new` use `src`/`dst`
+    and no `event`.
+  - `charts` (`internal/charts/mirror.go`): `mirroring chart` / `chart done` use
+    `chart`/`dst` and no `status` on drift.
+  - runner (`internal/sync/runner.go`): `sync started`, `entry started/finished`,
+    `plan failed`, `job failed, retrying` have no `event`; failed jobs are only
+    logged on the Helm repo path (`chart.failed`).
+  - Selector exclusions (`tag excluded by selector`, `version excluded by
+    selector`) and the crane progress lines (in JSON they are only wrapped, not
+    structured).
+  - Decide whether the text format should also show durations in a single unit
+    (it prints Go notation such as `850ms` / `4.227s`, while JSON uses seconds).
+  - Decide whether the text format should include `msg=` and `level=` like
+    JSON. `plainHandler` (`cmd/flux-mirror/logging.go`) is shared by every slog
+    line in verbose mode, so changing it (for example to the standard
+    `slog.TextHandler` logfmt) is a global change: all lines would become
+    `time=… level=INFO msg="…" k=v` with RFC3339 times, and `docs/sync.md`
+    examples and tests would need updating. crane's own progress lines would
+    still be plain `log` lines in text mode. Today text lines already carry
+    `event=…` on the Helm repo path; use `--log-format json` for `msg`/`level`.
 
 ## Verify gaps (to design)
 

@@ -80,6 +80,7 @@ anonymously, and `provider` hosts are not supported.
 | `--drift-exit-code N`           | `2`     | Exit code to use when drift is detected without failures (0–255). Set to `0` for immutable destinations that should not fail CI on drift. |
 | `--dry-run`                     | `false` | Run the plan and comparison pipeline without performing any writes. Reported as `would-copy` / `would-overwrite`.                   |
 | `--verbose`                     | `false` | Log every operation and the involved digests on stderr. Suppresses the spinner.                                                     |
+| `--log-format text\|json`       | `text`  | Format of the `--verbose` log stream. `json` writes one JSON object per line and requires `--verbose`. See [Verbose mode](#verbose-mode). |
 | `--no-progress`                 | `false` | Disable the live progress spinner. Per-job lines and the summary still print.                                                       |
 | `--insecure`                    | `false` | Allow plaintext HTTP and skip TLS verification. Test/dev only. Also permits `http://` Helm repository destinations.                |
 
@@ -114,6 +115,28 @@ missing-blob, or push-rejection issues.
 …
 2026/05/13 09:00:04 sync complete entries=3 copied=1 overwritten=0 skipped=1 drifted=0 failed=1 duration=4.213s
 ```
+
+With `--log-format json` every line on stderr (including the registry client's
+own progress and warning lines) is a JSON object with `time`, `level`, `msg`,
+and the attributes of the line. Durations such as `elapsed`, `wall`, and
+`timeout` are numbers of seconds, rounded to milliseconds; the text format keeps
+Go's duration notation (`812ms`, `4.213s`).
+
+Per-chart lines of an [`artifacts`](config.md#publishing-to-a-helm-repository)
+entry with `destinationType: artifactory` share the same fields, identified by
+a stable `event`:
+
+| `event`        | Level | Meaning                                  | Fields besides `source`, `tag`, `destination`   |
+|----------------|-------|------------------------------------------|--------------------------------------------------|
+| `chart.start`  | INFO  | The chart is being compared/uploaded.    |                                                  |
+| `chart.skip`   | INFO  | The destination file is up to date.      | `digest`, `reason`                               |
+| `chart.drift`  | WARN  | The destination file differs and `overwrite` is false. | `digest`, `dst_digest`, `reason`   |
+| `chart.done`   | INFO  | The tag finished without error.          | `status`, `digest`, `elapsed`                    |
+| `chart.failed` | ERROR | The tag failed.                          | `error`, `elapsed`                               |
+
+`source` is the OCI repository, `tag` the source tag, `destination` the full
+URL of the `.tgz`, `digest` the SHA-256 of the source chart layer, and
+`dst_digest` the SHA-256 of the existing file.
 
 ### Structured output
 
