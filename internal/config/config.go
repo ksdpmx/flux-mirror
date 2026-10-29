@@ -21,6 +21,7 @@ import (
 
 	apiv1 "github.com/fluxcd/flux-mirror/api/v1beta1"
 	"github.com/fluxcd/flux-mirror/internal/envelope"
+	"github.com/fluxcd/flux-mirror/internal/helmrepo"
 )
 
 // Decode reads YAML from r into a Config without validating it.
@@ -389,8 +390,21 @@ func validateArtifactEntry(a apiv1.ArtifactEntry) error {
 	if _, err := name.NewRepository(a.Source); err != nil {
 		return fmt.Errorf("source %q is not a valid OCI repository: %w", a.Source, err)
 	}
-	if _, err := name.NewRepository(a.Destination); err != nil {
-		return fmt.Errorf("destination %q is not a valid OCI repository: %w", a.Destination, err)
+	switch a.EffectiveDestinationType() {
+	case apiv1.DestinationTypeOCI:
+		if _, err := name.NewRepository(a.Destination); err != nil {
+			return fmt.Errorf("destination %q is not a valid OCI repository: %w", a.Destination, err)
+		}
+	case apiv1.DestinationTypeArtifactory:
+		if _, err := helmrepo.NormalizeDestination(a.Destination); err != nil {
+			return fmt.Errorf("destination: %w", err)
+		}
+		if a.IncludeReferrers {
+			return fmt.Errorf("includeReferrers is not supported with destinationType %q", apiv1.DestinationTypeArtifactory)
+		}
+	default:
+		return fmt.Errorf("destinationType %q must be %q or %q", a.DestinationType,
+			apiv1.DestinationTypeOCI, apiv1.DestinationTypeArtifactory)
 	}
 	if err := validateSelector(a.Selector); err != nil {
 		return fmt.Errorf("selector: %w", err)

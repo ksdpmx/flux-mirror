@@ -1,0 +1,13 @@
+apiVersion: mirror.plugin.fluxcd.io/v1beta1
+kind: Config
+hosts:
+  - host: example.jfrog.io
+    credential:
+      value: ${JFROG_TOKEN}
+artifacts:
+  - source: ghcr.io/stefanprodan/charts/podinfo
+    destination: example.jfrog.io/artifactory/helm-local/podinfo
+    destinationType: artifactory
+    selector:
+      semver: ">=6.9.0"
+      limit: 3

@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"time"
 
 	apiv1 "github.com/fluxcd/flux-mirror/api/v1beta1"
+	"github.com/fluxcd/flux-mirror/internal/helmrepo"
 	"github.com/fluxcd/flux-mirror/internal/oci"
 	"github.com/fluxcd/flux-mirror/internal/selector"
 	"github.com/fluxcd/flux-mirror/internal/sync"
@@ -34,6 +36,14 @@ type Options struct {
 	Logger *slog.Logger
 	// Verifier verifies source artifact signatures when entry.verify is set.
 	Verifier Verifier
+
+	// Hosts, Transport and Insecure configure the HTTP client used for
+	// destinationType "artifactory" entries: hosts supplies Basic credentials,
+	// Transport is the shared transport that stamps bearer credentials, and
+	// Insecure allows a plaintext http:// destination.
+	Hosts     []apiv1.RegistryHost
+	Transport http.RoundTripper
+	Insecure  bool
 }
 
 // Verifier checks a selected source reference before it is mirrored. On
@@ -62,6 +72,7 @@ type mirror struct {
 	client *oci.Client
 	entry  apiv1.ArtifactEntry
 	opts   Options
+	pusher *helmrepo.Pusher // set by Plan for destinationType "artifactory"
 }
 
 // tagJob carries everything a per-tag job needs that was resolved at plan
@@ -96,6 +107,13 @@ func (m *mirror) Plan(ctx context.Context) (sync.Plan, error) {
 
 	overwrite := m.entry.Overwrite || m.opts.Overwrite
 
+	toHelmRepo := m.entry.EffectiveDestinationType() == apiv1.DestinationTypeArtifactory
+	if toHelmRepo {
+		if err := m.prepareHelmRepo(ctx, sel.Tags); err != nil {
+			return plan, err
+		}
+	}
+
 	plan.Jobs = make([]sync.Job, 0, len(sel.Tags))
 	for _, tag := range sel.Tags {
 		job := tagJob{
@@ -103,6 +121,9 @@ func (m *mirror) Plan(ctx context.Context) (sync.Plan, error) {
 			src:       m.entry.Source + ":" + tag,
 			dst:       m.entry.Destination + ":" + tag,
 			overwrite: overwrite,
+		}
+		if toHelmRepo {
+			job.dst = m.pusher.Dir()
 		}
 
 		if m.entry.Verify != nil {
@@ -176,11 +197,15 @@ func (m *mirror) Plan(ctx context.Context) (sync.Plan, error) {
 			job.refs = refs
 		}
 
+		run := func(jctx context.Context) (sync.JobResult, error) { return m.runTag(jctx, job) }
+		if toHelmRepo {
+			run = func(jctx context.Context) (sync.JobResult, error) { return m.runChartTag(jctx, job) }
+		}
 		plan.Jobs = append(plan.Jobs, sync.Job{
 			ID:           tag,
 			Dst:          job.dst,
 			Verification: job.verification,
-			Run:          func(jctx context.Context) (sync.JobResult, error) { return m.runTag(jctx, job) },
+			Run:          run,
 		})
 	}
 	return plan, nil

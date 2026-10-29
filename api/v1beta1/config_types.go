@@ -75,6 +75,12 @@ const (
 	// per-host credential.
 	RegistryProviderGAR = "gar"
 
+	// DestinationTypeOCI mirrors to an OCI registry (ArtifactEntry.DestinationType).
+	DestinationTypeOCI = "oci"
+	// DestinationTypeArtifactory publishes an OCI Helm chart to a JFrog
+	// Artifactory Helm repository over HTTP(S) (ArtifactEntry.DestinationType).
+	DestinationTypeArtifactory = "artifactory"
+
 	// defaultChartVersion is the chart version constraint applied when unset.
 	defaultChartVersion = "*"
 	// defaultLimit is the chart/selector limit applied when unset.
@@ -393,8 +399,18 @@ type ArtifactEntry struct {
 	// Source is the OCI repository the artifact is mirrored from.
 	Source string `json:"source"`
 
-	// Destination is the OCI repository the artifact is mirrored to.
+	// Destination is where the artifact is mirrored to. For DestinationType
+	// "oci" it is an OCI repository. For "artifactory" it is the directory URL
+	// of a Helm repository (scheme optional, https by default); the chart file
+	// name (<name>-<version>.tgz) is appended automatically.
 	Destination string `json:"destination"`
+
+	// DestinationType selects the kind of destination. "artifactory" requires
+	// the source to be an OCI Helm chart and publishes the chart .tgz to a JFrog
+	// Artifactory Helm repository. Defaults to "oci".
+	// +optional
+	// +kubebuilder:validation:Enum=oci;artifactory
+	DestinationType string `json:"destinationType,omitempty"`
 
 	// Selector selects which tags to mirror.
 	Selector Selector `json:"selector"`
@@ -410,6 +426,15 @@ type ArtifactEntry struct {
 	// Verify configures signature verification for source artifacts.
 	// +optional
 	Verify *ArtifactVerification `json:"verify,omitempty"`
+}
+
+// EffectiveDestinationType returns the destination type with the documented
+// default applied.
+func (a ArtifactEntry) EffectiveDestinationType() string {
+	if strings.TrimSpace(a.DestinationType) == "" {
+		return DestinationTypeOCI
+	}
+	return a.DestinationType
 }
 
 // ArtifactVerification configures signature verification for source artifacts.

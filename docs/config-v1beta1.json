@@ -15,7 +15,15 @@
         "description": "ArtifactEntry mirrors an OCI artifact (image, OCI chart, signed manifest, etc.).",
         "properties": {
           "destination": {
-            "description": "Destination is the OCI repository the artifact is mirrored to.",
+            "description": "Destination is where the artifact is mirrored to. For DestinationType\n\"oci\" it is an OCI repository. For \"artifactory\" it is the directory URL\nof a Helm repository (scheme optional, https by default); the chart file\nname (\u003cname\u003e-\u003cversion\u003e.tgz) is appended automatically.",
+            "type": "string"
+          },
+          "destinationType": {
+            "description": "DestinationType selects the kind of destination. \"artifactory\" requires\nthe source to be an OCI Helm chart and publishes the chart .tgz to a JFrog\nArtifactory Helm repository. Defaults to \"oci\".",
+            "enum": [
+              "oci",
+              "artifactory"
+            ],
             "type": "string"
           },
           "includeReferrers": {

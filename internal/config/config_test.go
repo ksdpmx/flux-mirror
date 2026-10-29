@@ -243,6 +243,40 @@ func TestValidate_Table(t *testing.T) {
 			},
 		},
 		{
+			name: "valid artifactory destination without scheme",
+			cfg: Config{
+				TypeMeta: metav1.TypeMeta{APIVersion: GroupVersion.String(), Kind: ConfigKind},
+				Artifacts: []ArtifactEntry{{
+					Source: "ghcr.io/a/chart", Destination: "x.jfrog.io/artifactory/helm-local/team",
+					DestinationType: DestinationTypeArtifactory,
+					Selector:        Selector{Limit: new(1)},
+				}},
+			},
+		},
+		{
+			name: "artifactory destination bad scheme",
+			cfg: Config{TypeMeta: metav1.TypeMeta{APIVersion: GroupVersion.String(), Kind: ConfigKind}, Artifacts: []ArtifactEntry{{
+				Source: "ghcr.io/a/chart", Destination: "oci://x.jfrog.io/helm-local",
+				DestinationType: DestinationTypeArtifactory,
+			}}},
+			errMsg: "scheme must be https",
+		},
+		{
+			name: "artifactory with includeReferrers",
+			cfg: Config{TypeMeta: metav1.TypeMeta{APIVersion: GroupVersion.String(), Kind: ConfigKind}, Artifacts: []ArtifactEntry{{
+				Source: "ghcr.io/a/chart", Destination: "https://x.jfrog.io/helm-local",
+				DestinationType: DestinationTypeArtifactory, IncludeReferrers: true,
+			}}},
+			errMsg: "includeReferrers is not supported",
+		},
+		{
+			name: "unknown destinationType",
+			cfg: Config{TypeMeta: metav1.TypeMeta{APIVersion: GroupVersion.String(), Kind: ConfigKind}, Artifacts: []ArtifactEntry{{
+				Source: "ghcr.io/a/chart", Destination: "ghcr.io/c/d", DestinationType: "nexus",
+			}}},
+			errMsg: "destinationType \"nexus\" must be",
+		},
+		{
 			name:   "wrong apiVersion",
 			cfg:    Config{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: ConfigKind}, Artifacts: validArtifact()},
 			errMsg: "apiVersion must be",

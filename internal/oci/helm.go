@@ -118,6 +118,87 @@ func (c *Client) PullHelmChart(ctx context.Context, ref string) (data []byte, ma
 	return data, desc.Digest.String(), nil
 }
 
+// HelmChart is a handle to an OCI Helm chart resolved at one manifest, so the
+// layer streamed by Open is the one whose digest and size were reported.
+type HelmChart struct {
+	// Name and Version come from the chart's OCI config blob (Chart.yaml).
+	Name    string
+	Version string
+	// ManifestDigest is the digest of the manifest the chart was resolved at.
+	ManifestDigest string
+	// LayerDigest and Size describe the chart .tgz layer. LayerDigest equals
+	// sha256 of the .tgz bytes.
+	LayerDigest string
+	Size        int64
+
+	layer v1.Layer
+}
+
+// Open streams the chart .tgz bytes. The registry client verifies the digest
+// when the stream is read to EOF.
+func (h *HelmChart) Open() (io.ReadCloser, error) { return h.layer.Compressed() }
+
+// OpenHelmChart resolves the OCI Helm chart at ref without downloading the
+// chart layer. It errors when ref is not a Helm chart or has no chart-content
+// layer.
+func (c *Client) OpenHelmChart(ctx context.Context, ref string) (*HelmChart, error) {
+	parsed, err := name.ParseReference(ref, c.staticNameOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("parse %s: %w", ref, err)
+	}
+	desc, err := remote.Get(parsed, c.remoteOpts(ctx)...)
+	if err != nil {
+		return nil, fmt.Errorf("get manifest %s: %w", ref, err)
+	}
+	img, err := desc.Image()
+	if err != nil {
+		return nil, fmt.Errorf("resolve image %s: %w", ref, err)
+	}
+	manifest, err := img.Manifest()
+	if err != nil {
+		return nil, fmt.Errorf("read manifest %s: %w", ref, err)
+	}
+	if manifest.Config.MediaType != HelmConfigMediaType {
+		return nil, fmt.Errorf("%s is not a Helm chart (config mediaType %q)", ref, manifest.Config.MediaType)
+	}
+	var chartDesc *v1.Descriptor
+	for i := range manifest.Layers {
+		if manifest.Layers[i].MediaType == HelmChartLayerMediaType {
+			chartDesc = &manifest.Layers[i]
+			break
+		}
+	}
+	if chartDesc == nil {
+		return nil, fmt.Errorf("%s has no Helm chart content layer (mediaType %s)", ref, HelmChartLayerMediaType)
+	}
+	rawCfg, err := img.RawConfigFile()
+	if err != nil {
+		return nil, fmt.Errorf("read chart config of %s: %w", ref, err)
+	}
+	var meta struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(rawCfg, &meta); err != nil {
+		return nil, fmt.Errorf("parse chart config of %s: %w", ref, err)
+	}
+	if meta.Name == "" || meta.Version == "" {
+		return nil, fmt.Errorf("chart config of %s has no name or version", ref)
+	}
+	layer, err := img.LayerByDigest(chartDesc.Digest)
+	if err != nil {
+		return nil, fmt.Errorf("get chart layer of %s: %w", ref, err)
+	}
+	return &HelmChart{
+		Name:           meta.Name,
+		Version:        meta.Version,
+		ManifestDigest: desc.Digest.String(),
+		LayerDigest:    chartDesc.Digest.String(),
+		Size:           chartDesc.Size,
+		layer:          layer,
+	}, nil
+}
+
 // PushHelmChart uploads a Helm chart to dst. configJSON is the marshaled
 // chart.Metadata (becomes the chart's OCI config blob); chartTGZ is the
 // chart tarball.

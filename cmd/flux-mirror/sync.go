@@ -178,6 +178,9 @@ func syncCmdRun(cmd *cobra.Command, args []string) error {
 			Verbose:   syncArgs.verbose,
 			CopyJobs:  syncArgs.concurrency,
 			Logger:    logger,
+			Hosts:     cfg.Hosts,
+			Transport: t,
+			Insecure:  syncArgs.insecure,
 		}))
 	}
 	for _, e := range cfg.Charts {
