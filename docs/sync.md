@@ -77,6 +77,13 @@ auth and always comes from the ambient Helm repositories config:
 Add repositories with `helm repo add` and `flux mirror` picks up matching HTTP/S
 repository credentials automatically.
 
+`artifacts` entries with [`destinationType: artifactory`](config.md#publishing-to-a-helm-repository)
+authenticate to the Helm repository through [`hosts`](config.md#hosts) instead:
+a `credential` without `username` is sent as a bearer token and one with
+`username` as Basic auth. Only hosts with `direction` `destination` or `both`
+apply. Hosts not listed under `hosts` are accessed anonymously, and `provider`
+hosts are not supported.
+
 ## Flags
 
 | Flag                            | Default | Description                                                                                                                          |
@@ -90,7 +97,7 @@ repository credentials automatically.
 | `--dry-run`                     | `false` | Run the plan and comparison pipeline without performing any writes. Reported as `would-copy` / `would-overwrite`.                   |
 | `--verbose`                     | `false` | Log every operation and the involved digests on stderr. Suppresses the spinner.                                                     |
 | `--no-progress`                 | `false` | Disable the live progress spinner. Per-job lines and the summary still print.                                                       |
-| `--insecure`                    | `false` | Allow plaintext HTTP and skip TLS verification. Test/dev only.                                                                      |
+| `--insecure`                    | `false` | Allow plaintext HTTP and skip TLS verification. Test/dev only. Also permits `http://` Helm repository destinations.                |
 | `--token-cache-max-size N`      | `100`   | Maximum number of provider credentials cached. Set to `0` to disable the cache.                                                     |
 | `--token-cache-max-duration DURATION` | `1h` | Maximum duration a cached provider token is reused before it is refreshed.                                                         |
 
@@ -288,6 +295,30 @@ artifacts:
       semver: ">=6.0.0"
       limit: 5
 ```
+
+### Publish OCI Helm charts to an Artifactory Helm repository
+
+To serve an OCI Helm chart from a classic Helm repository (an `index.yaml` plus
+`.tgz` files), set `destinationType: artifactory`. The chart is downloaded from
+the OCI source and uploaded to the JFrog Artifactory Helm repository directory in
+`destination`; the file name (`<name>-<version>.tgz`) is generated.
+
+```yaml
+apiVersion: mirror.plugin.fluxcd.io/v1beta2
+kind: Config
+hosts:
+  - host: example.jfrog.io
+    credential:
+      value: ${JFROG_TOKEN}
+artifacts:
+  - source: ghcr.io/stefanprodan/charts/podinfo
+    destination: example.jfrog.io/artifactory/helm-local/podinfo
+    destinationType: artifactory
+    selector:
+      semver: ">=6.9.0"
+```
+
+See [Publishing to a Helm repository](config.md#publishing-to-a-helm-repository).
 
 ### Mirror images from GHCR into a private registry
 

@@ -182,12 +182,14 @@ func syncCmdRun(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	var destTransport http.RoundTripper
 	if !directional {
 		t, closeTransport, err := buildClientTransport(cmd.Context(), cfg.Hosts)
 		if err != nil {
 			return err
 		}
 		defer closeTransport()
+		destTransport = t
 		if t != nil {
 			clientOpts = append(clientOpts, oci.WithTransport(t))
 		}
@@ -213,6 +215,7 @@ func syncCmdRun(cmd *cobra.Command, args []string) error {
 			return err
 		}
 		defer closeDstTransport()
+		destTransport = dstTransport
 		if dstTransport != nil {
 			clientOpts = append(clientOpts, oci.WithDestinationTransport(dstTransport))
 		}
@@ -246,6 +249,9 @@ func syncCmdRun(cmd *cobra.Command, args []string) error {
 			CopyJobs:        syncArgs.concurrency,
 			PlanConcurrency: syncArgs.concurrency,
 			Logger:          logger,
+			Hosts:           registryauth.HostsForDirection(cfg.Hosts, apiv1.DirectionDestination),
+			Transport:       destTransport,
+			Insecure:        syncArgs.insecure,
 		}))
 	}
 	for _, e := range cfg.Charts {

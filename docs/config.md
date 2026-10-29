@@ -126,8 +126,10 @@ Each entry has two required fields:
 
 It also has optional fields documented below: `.selector`
 ([Tag selection](#tag-selection)), `.includeReferrers` ([Referrers](#referrers)),
-`.verify` ([Signature verification](#signature-verification)), `.overwrite` and
-`.ignoreDriftForExitCode` ([Overwrite and drift behavior](#overwrite-and-drift-behavior)).
+`.verify` ([Signature verification](#signature-verification)), `.overwrite`
+([Overwrite and drift behavior](#overwrite-and-drift-behavior)), 
+`.ignoreDriftForExitCode` ([Overwrite and drift behavior](#overwrite-and-drift-behavior)) and
+`.destinationType` ([Publishing to a Helm repository](#publishing-to-a-helm-repository)).
 
 ```yaml
 artifacts:
@@ -190,6 +192,44 @@ selector:
 mirrors the referrers of each selected tag — cosign signatures, SBOMs, and
 attestations attached via the [OCI 1.1 referrers API](https://github.com/opencontainers/distribution-spec/blob/main/spec.md#listing-referrers).
 It defaults to `false`.
+
+#### Publishing to a Helm repository
+
+`.artifacts[].destinationType` selects the kind of destination. It is `oci`
+(the default) or `artifactory`. With `artifactory`, an OCI Helm chart is
+downloaded from `.source` and published as a `.tgz` to a JFrog Artifactory Helm
+repository over HTTP(S); Artifactory regenerates the repository `index.yaml`.
+Container images and other non-chart artifacts are rejected: the entry fails at
+plan time (also with `--dry-run`) when the first selected tag is not a Helm chart.
+
+With `artifactory`, `.destination` is the repository directory URL. The scheme is
+optional and defaults to `https`; `http://` is accepted only with `--insecure`.
+The file name is generated as `<chart name>-<version>.tgz` from the chart's
+config blob, and nothing else is appended, so add any chart directory to the
+destination yourself:
+
+```yaml
+artifacts:
+  - source: ghcr.io/stefanprodan/charts/podinfo
+    destination: example.jfrog.io/artifactory/helm-local/podinfo
+    destinationType: artifactory
+    selector:
+      semver: ">=6.9.0"
+```
+
+The chart version in the config blob must equal the tag (with `_` read as `+`);
+a mismatch fails only that tag. Existing files are compared by SHA-256: equal
+files are skipped, different files are reported as drift unless `overwrite` is
+set. Artifactory may forbid overwriting, which surfaces as a `403` error.
+`.includeReferrers` is not supported with `artifactory`, and signatures are not
+copied. [`.verify`](#signature-verification) is supported and the chart is then
+downloaded by the verified digest.
+
+Authentication reuses [`hosts`](#hosts) for the destination host, using entries
+whose [`direction`](#host-direction) is `destination` or `both`: a credential
+without `credential.username` is sent as a bearer token, and a credential with
+`credential.username` uses Basic auth. Cloud `provider` hosts are not supported
+and fail the entry.
 
 #### Signature verification
 
@@ -690,6 +730,7 @@ first mirrored. Referrers that exist with a different digest are skipped
 | `artifacts[].overwrite`              | `false`    |
 | `artifacts[].includeReferrers`       | `false`    |
 | `artifacts[].ignoreDriftForExitCode` | `false`    |
+| `artifacts[].destinationType`        | `oci`      |
 | `artifacts[].verify`                 | unset      |
 | `charts[].version`                   | `*`        |
 | `charts[].limit`                     | `1`        |

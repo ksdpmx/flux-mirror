@@ -31,6 +31,7 @@ import (
 	"github.com/fluxcd/pkg/helmtestserver"
 
 	apiv1 "github.com/fluxcd/flux-mirror/api/v1beta2"
+	"github.com/fluxcd/flux-mirror/internal/oci"
 	"github.com/fluxcd/flux-mirror/internal/registryauth"
 	"github.com/fluxcd/flux-mirror/internal/testregistry"
 )
@@ -732,4 +733,62 @@ func TestSync_BadOutputFormat(t *testing.T) {
 	cfgPath := writeConfig(t, "ghcr.io/a/b", "ghcr.io/c/d")
 	_, err := executeCommand([]string{"sync", cfgPath, "-o", "xml"})
 	g.Expect(err).To(HaveOccurred())
+}
+
+func TestSync_ArtifactoryUsesDestinationHostCredential(t *testing.T) {
+	g := NewWithT(t)
+	ensureRegistry(t)
+
+	src := dockerReg + "/helm-dir-src-" + testregistry.RandSuffix()
+	tgz := testregistry.PackageChart(t, "../../internal/helmrepo/testdata/podinfo", "1.0.0")
+	_, err := oci.NewClient(oci.Insecure()).PushHelmChart(
+		context.Background(), src+":1.0.0", testregistry.ChartConfigJSON(t, tgz), tgz)
+	g.Expect(err).ToNot(HaveOccurred())
+
+	var puts []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, pass, _ := r.BasicAuth()
+		if user != "dest" || pass != "dest-pass" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		switch r.Method {
+		case http.MethodPut:
+			puts = append(puts, r.URL.Path)
+			w.WriteHeader(http.StatusCreated)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	host := strings.TrimPrefix(srv.URL, "http://")
+
+	// The source entry comes first and must not be used for the upload.
+	cfg := fmt.Sprintf(`apiVersion: mirror.plugin.fluxcd.io/v1beta2
+kind: Config
+hosts:
+  - host: %[1]s
+    direction: source
+    credential:
+      username: src
+      value: src-pass
+  - host: %[1]s
+    direction: destination
+    credential:
+      username: dest
+      value: dest-pass
+artifacts:
+  - source: %[2]s
+    destination: %[3]s/helm-local/team
+    destinationType: artifactory
+    selector:
+      semver: ">=0.0.0"
+`, host, src, srv.URL)
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	g.Expect(os.WriteFile(cfgPath, []byte(cfg), 0o600)).To(Succeed())
+	t.Setenv("FLUX_MIRROR_CONFIG", "")
+
+	out, err := executeCommand([]string{"sync", cfgPath, "--insecure", "-o", "json"})
+	g.Expect(err).ToNot(HaveOccurred(), out)
+	g.Expect(puts).To(Equal([]string{"/helm-local/team/podinfo-1.0.0.tgz"}))
 }
