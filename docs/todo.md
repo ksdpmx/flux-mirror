@@ -7,14 +7,59 @@ This file tracks what is still open.
 
 ## Open: charts to a Helm repo
 
+Decided order: C0 first (own commit), then C1-C3.
+
+- **C0.** Align `charts` version selection with `artifacts` by adding
+  `charts[].selector`, the same `Selector` type and `validateSelector` as
+  `artifacts` (`regex.pattern`, `regex.extract`, `semver`, `sortBy`, `limit`).
+  - `charts[].version` is kept but deprecated: it is an alias for
+    `selector.semver`. Setting both `version` and `selector.semver` is a
+    validation error. The flat `limit` is kept the same way, as an alias for
+    `selector.limit` (inferred, not explicitly agreed); setting both is an
+    error.
+  - Defaults, deliberately different depending on whether `selector` is set:
+    - With `selector`: identical to `artifacts`. No `semver` means no semver
+      filter, so prereleases are included (and the default `limit: 1` can pick a
+      release candidate). Document this in `docs/config.md`.
+    - Without `selector` (existing configs): unchanged legacy behavior,
+      `version` defaults to `"*"` and excludes prereleases.
+  - Plan: use the entry's selector in `internal/charts/mirror.go` (today it
+    builds `Selector{Semver: version, Limit}` only), validate in
+    `internal/config`, `make generate`, docs, tests (regex with `extract`,
+    prerelease with and without `selector`, alias conflicts).
+  - Resolves the `charts` half of T5.
 - **C1.** Add `charts[].destinationType` (`oci | artifactory`, default `oci`)
   with the same semantics as `artifacts`: the destination is the directory URL
   (scheme optional, `http://` only with `--insecure`) and no chart name is
   appended. This differs from `charts` to OCI, which appends `/<name>`.
+  Resolve destination credentials with
+  `registryauth.HostsForDirection(hosts, destination)`, as `artifacts` does.
+  `oci` keeps requiring an `oci://` destination; `artifactory` rejects `oci://`.
 - **C2.** Extract a `chartSink` in `internal/charts` (OCI and Artifactory
   implementations) on top of `helmrepo.Pusher`; plan, drift, and outcome logic
   stay unchanged.
-- **C3.** Config validation, `docs/config.md`, `examples/`, tests.
+  - Share the Pusher construction (host matching, bearer vs Basic, reject cloud
+    provider hosts) with `internal/artifacts` instead of copying it.
+  - Create the sink in `Plan`, not in `charts.New`, so a bad destination or a
+    provider host fails that entry (also with `--dry-run`) instead of aborting the
+    whole sync at build time.
+  - Show the directory URL as `Plan.Destination` and the full `.tgz` URL as the
+    job `Dst`.
+  - Before uploading (only for `copied` / `overwritten`, not for `skipped` or
+    `drifted`), read `<chart>/Chart.yaml` from the tarball and fail that version
+    if `name` or `version` differs from the expected values. Read only that
+    entry from the tar stream rather than `loader.LoadArchive`. Note this differs
+    from `artifacts`, which takes name and version from the OCI config blob and
+    only compares `version` with the tag (it does not check `name`, nor compare
+    the blob with the tarball); consider adding a `name` check there.
+  - Verbose logs for `charts` stay as they are (see T3).
+- **C3.** Config validation, `docs/config.md` (charts section, auth), `docs/sync.md`,
+  an `examples/` file, and tests: validation tables, `charts` to a fake
+  Artifactory for copied / skipped / drifted / overwritten / dry-run / provider
+  host / name or version mismatch. Move the fake Artifactory server shared by the
+  `helmrepo` and `artifacts` tests into `internal/testregistry`.
+- Out of scope for this work: B1 (source auth via `hosts`), B2, B3, T5's
+  `artifacts` default, V8.
 
 ## Follow-ups from real-world testing
 
@@ -23,9 +68,57 @@ This file tracks what is still open.
   shows at `PUT` (for example a missing `/artifactory` context path). The `PUT`
   404 now carries a hint; probing the repository in `Plan` would surface it
   earlier.
-- **T2.** Unknown config fields are ignored silently (for example `name:` under
-  `artifacts`, which is not a field). Consider strict decoding or a warning in
-  `config.Decode`; rejecting them would break existing configs.
+- **T3.** Verbose logs have no stable schema and no JSON format: lines use ad
+  hoc fields (`src`/`dst`, `chart`/`dst`) and no `event`. Define one schema (for
+  example `event`, `source`, `tag`, `destination`, `status`, `digest`, `reason`,
+  `error`, `elapsed`), then add `--log-format text|json` for the `--verbose`
+  stream on top of it:
+  - `artifacts` to OCI (`internal/artifacts/mirror.go`): `mirroring tag`,
+    `tag done`, drift and referrer warnings, `signature too new` use `src`/`dst`
+    and no `event`.
+  - `artifacts` to a Helm repo (`internal/artifacts/helmrepo.go`):
+    `mirroring chart`, `chart done`, and the drift warning use `src`/`dst` and
+    no `event`.
+  - `charts` (`internal/charts/mirror.go`): `mirroring chart` / `chart done` use
+    `chart`/`dst` and no `status` on drift.
+  - runner (`internal/sync/runner.go`): `sync started`, `entry started/finished`,
+    `plan failed`, `job failed, retrying` have no `event`.
+  - Selector exclusions (`tag excluded by selector`, `version excluded by
+    selector`) and the crane progress lines (a JSON handler would only wrap
+    them, not structure them).
+  - Durations: the text format prints Go notation such as `850ms` / `4.227s`,
+    while slog's JSON handler emits integer nanoseconds. A JSON format needs a
+    `ReplaceAttr` that renders `time.Duration` as seconds.
+  - Decide whether the text format should include `msg=` and `level=` like a
+    JSON stream. `plainHandler` (`cmd/flux-mirror/logging.go`) is shared by every
+    slog line in verbose mode, so changing it (for example to the standard
+    `slog.TextHandler` logfmt) is a global change: all lines would become
+    `time=… level=INFO msg="…" k=v` with RFC3339 times, and `docs/sync.md`
+    examples and tests would need updating. crane's own progress lines would
+    still be plain `log` lines in text mode.
+- **T4.** With `destinationType: artifactory`, a host `credential` that sets
+  `username` is resolved through `registryauth.ResolveHostAuth` on every HTTP
+  request. A `credential.provider` token source (for example `github`) therefore
+  mints a new token per `HEAD`/`PUT`, bypassing the sync token cache, which only
+  covers cloud `provider` hosts. Static `value`/`fromPath` and the bearer path
+  (no `username`) are unaffected. Resolve once per entry or route it through the
+  token cache.
+- **T5.** `charts` and `artifacts` select versions differently, so prerelease
+  handling is inconsistent:
+  - `charts[].version` defaults to `"*"`, so the semver constraint always
+    applies and prereleases are excluded. Only a constraint with a prerelease
+    suffix (for example `">=1.0.0-0"`) includes them. `charts` has no regex,
+    `sortBy`, or `selector`.
+  - `artifacts[].selector.semver` has no default, so with no `semver` and no
+    `regex` every tag that parses as semver is kept, prereleases included. Sorted
+    by semver, `1.2.0-rc.1` ranks above `1.1.0`, so the default `limit: 1` picks
+    the release candidate. Adding `semver: "*"` or a `regex` excludes it.
+  - Decide whether to align the two (for example default `artifacts` to exclude
+    prereleases, add an explicit opt-in, or give `charts` a `selector`), and
+    document the behavior in `docs/config.md` either way. Changing the
+    `artifacts` default alters which tags existing configs mirror.
+  - Decided for `charts`: add `charts[].selector` with `artifacts` semantics (see
+    C0). Still open: whether the `artifacts` default should change.
 
 ## Verify gaps (to design)
 
@@ -71,6 +164,22 @@ fallback) and verifies that single signature. Known gaps:
   referrers and the tag discovery paths. `minAge` needs a verified Rekor
   integrated time, so it only applies when the bundle carries one. Until then,
   such sources must be mirrored without `verify`.
+- **V8. `charts` (HTTP/S Helm repo source) has no verification at all.**
+  `ChartEntry` has no `verify`: cosign signatures live in OCI registries, which
+  a classic Helm repo (`index.yaml` plus `.tgz`) does not have. Today
+  `helmrepo.HTTPSource.Download` also does not compare the tarball with the
+  `digest` in `index.yaml`, so not even integrity is checked; trust rests on
+  HTTPS and the source site.
+  - Integrity: verify sha256(tgz) against the `index.yaml` `digest` (skip with a
+    clear error when the index has none). Cheap; fits together with B3, which
+    also reads that digest.
+  - Authenticity: verify the Helm provenance file (`<chart>-<version>.tgz.prov`,
+    PGP) the way `helm verify` does. Needs a public keyring field in the config
+    (same shape of problem as V7's static public key) and a `.prov` download per
+    version. A `verify` block under `charts[]` would have to be designed first
+    (provider, keyring, whether a missing `.prov` fails the version).
+  - Mirroring a chart through OCI and then using `artifacts` with cosign only
+    helps when the OCI copy is signed by you.
 
 ## Backlog
 
@@ -85,11 +194,12 @@ fallback) and verifies that single signature. Known gaps:
 - **B3.** `charts` drift check downloads every tgz even when already synced.
   Compare the `digest` in `index.yaml` against the destination first and skip
   the download when equal. Behavior change; handle indexes without `digest`.
-- **B4.** `artifacts` `verify` runs serially inside `Plan`, including with
-  `--dry-run`. Move it into jobs so it runs under the concurrency limit while
-  preserving: stop after the first verify failure, `signature-too-new` skips,
-  entry-level failure when no digest is returned, report row order and
-  `Verification` fields.
+- **B4.** `artifacts` `verify` still runs serially inside `Plan`, including
+  with `--dry-run`; only the digest and referrer snapshot run under
+  `--concurrency` (planning concurrency). Move verification into jobs so it
+  runs under the concurrency limit while preserving: stop after the first
+  verify failure, `signature-too-new` skips, entry-level failure when no digest
+  is returned, report row order and `Verification` fields.
 - **B5.** Other `destinationType` values (chartmuseum, nexus, ...).
 - **B6.** Chart tgz is fully buffered in memory (up to 100MB each, times
   concurrency, plus `LoadArchive`).
