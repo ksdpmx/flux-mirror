@@ -81,7 +81,9 @@ func TestFromV1Beta1(t *testing.T) {
 
 	g.Expect(out.Charts).To(HaveLen(1))
 	g.Expect(out.Charts[0].Name).To(Equal("foo"))
-	g.Expect(*out.Charts[0].Limit).To(Equal(5))
+	// v1beta1 version and limit become the selector's semver and limit.
+	g.Expect(out.Charts[0].Selector.Semver).To(Equal(">=1.0.0"))
+	g.Expect(*out.Charts[0].Selector.Limit).To(Equal(5))
 	g.Expect(out.Charts[0].Overwrite).To(BeTrue())
 
 	g.Expect(out.Artifacts).To(HaveLen(1))

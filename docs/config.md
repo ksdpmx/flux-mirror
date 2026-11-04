@@ -48,8 +48,9 @@ charts:
   - name: podinfo
     source: https://stefanprodan.github.io/podinfo
     destination: oci://quay.io/my-org/charts
-    version: "6.x"
-    limit: 2
+    selector:
+      semver: "6.x"
+      limit: 2
 hosts:
   - host: quay.io
     credential:
@@ -298,11 +299,15 @@ Each entry offers the following subfields:
   same); with `artifactory` it is a Helm repository directory URL.
 - `.destinationType`, an optional kind of destination: `oci` (the default) or
   `artifactory`.
-- `.version`, an optional [semver range](https://github.com/Masterminds/semver#checking-version-constraints)
-  (e.g. `>=2.7.0 <3.0.0`). Versions outside the range are dropped. It defaults to
-  `*` (all versions).
-- `.limit`, how many matching versions to mirror, highest first. It defaults to
-  `1`; `0` disables the cap.
+- `.selector`, required, which chart versions to mirror. It is the same
+  [selector](#tag-selection) `.artifacts` use (`regex`, `semver`, `sortBy`,
+  `limit`), applied to the version strings listed in the repository's
+  `index.yaml`, for example `1.2.3+build.5` (not the OCI tag form
+  `1.2.3_build.5`). Defaults are the same as for artifacts: sorted by `semver`,
+  `limit: 1`, and **without `semver` no semver filter applies, so prereleases
+  such as `1.2.0-rc.1` are included and, as the highest version, are picked
+  first**. Set `semver: "*"` (or a range) to keep only releases, or a constraint
+  with a prerelease suffix such as `">=1.0.0-0"` to include them explicitly.
 - `.overwrite`, see [Overwrite and drift behavior](#overwrite-and-drift-behavior).
 
 Helm repository authentication is **not** configured under `hosts`. It is loaded
@@ -324,8 +329,9 @@ charts:
   - name: nginx
     source: https://charts.example.com
     destination: oci://quay.io/example/charts
-    version: ">=15.0.0 <16.0.0"
-    limit: 5
+    selector:
+      semver: ">=15.0.0 <16.0.0"
+      limit: 5
 ```
 
 #### Publishing charts to a Helm repository
@@ -353,8 +359,9 @@ charts:
     source: https://aws.github.io/eks-charts
     destination: example.jfrog.io/artifactory/helm-local/aws-vpc-cni
     destinationType: artifactory
-    version: ">=1.20.0"
-    limit: 3
+    selector:
+      semver: ">=1.20.0"
+      limit: 3
 ```
 
 Before a version is uploaded, the `Chart.yaml` inside the tarball must declare
@@ -778,8 +785,8 @@ first mirrored. Referrers that exist with a different digest are skipped
 | `artifacts[].destinationType`        | `oci`      |
 | `artifacts[].verify`                 | unset      |
 | `charts[].destinationType`           | `oci`      |
-| `charts[].version`                   | `*`        |
-| `charts[].limit`                     | `1`        |
+| `charts[].selector.sortBy`           | `semver`   |
+| `charts[].selector.limit`            | `1`        |
 | `charts[].overwrite`                 | `false`    |
 | `hosts[].direction`                  | `both`     |
 | `hosts[].provider`                   | `generic`  |

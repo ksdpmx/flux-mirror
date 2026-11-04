@@ -233,23 +233,27 @@ charts:
   - name: ingress-nginx
     source: https://kubernetes.github.io/ingress-nginx
     destination: oci://ghcr.io/my-org/charts
-    version: ">=4.11.0"
-    limit: 3
+    selector:
+      semver: ">=4.11.0"
+      limit: 3
   - name: cert-manager
     source: https://charts.jetstack.io
     destination: oci://ghcr.io/my-org/charts
-    version: ">=1.15.0"
-    limit: 3
+    selector:
+      semver: ">=1.15.0"
+      limit: 3
   - name: metrics-server
     source: https://kubernetes-sigs.github.io/metrics-server
     destination: oci://ghcr.io/my-org/charts
-    version: ">=3.12.0"
-    limit: 3
+    selector:
+      semver: ">=3.12.0"
+      limit: 3
   - name: kube-prometheus-stack
     source: https://prometheus-community.github.io/helm-charts
     destination: oci://ghcr.io/my-org/charts
-    version: ">=60.0.0"
-    limit: 3
+    selector:
+      semver: ">=60.0.0"
+      limit: 3
 hosts:
   # GHCR is the push destination. It expects a username/password login (the
   # username is any non-empty value; GHCR authorizes by the token), so
@@ -346,8 +350,9 @@ charts:
     source: https://aws.github.io/eks-charts
     destination: example.jfrog.io/artifactory/helm-local/aws-vpc-cni
     destinationType: artifactory
-    version: ">=1.20.0"
-    limit: 3
+    selector:
+      semver: ">=1.20.0"
+      limit: 3
 ```
 
 Run it with `--dry-run` first: it reads the destination (a `HEAD` per version)

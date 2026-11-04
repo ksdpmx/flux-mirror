@@ -515,11 +515,8 @@ func validateChartEntry(c apiv1.ChartEntry) error {
 		return fmt.Errorf("destinationType %q must be %q or %q", c.DestinationType,
 			apiv1.DestinationTypeOCI, apiv1.DestinationTypeArtifactory)
 	}
-	if _, err := semver.NewConstraint(c.EffectiveVersion()); err != nil {
-		return fmt.Errorf("version %q is not a valid semver constraint: %w", c.EffectiveVersion(), err)
-	}
-	if c.Limit != nil && *c.Limit < 0 {
-		return fmt.Errorf("limit must be >= 0 (0 = unlimited)")
+	if err := validateSelector(c.Selector); err != nil {
+		return fmt.Errorf("selector: %w", err)
 	}
 	return nil
 }

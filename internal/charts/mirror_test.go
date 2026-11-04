@@ -115,7 +115,7 @@ func TestChartsMirror_CopiesTopN(t *testing.T) {
 		Source:      srcURL,
 		Destination: "oci://" + dst,
 		Name:        "podinfo",
-		Limit:       new(2),
+		Selector:    apiv1.Selector{Limit: new(2)},
 	}
 	mirror, err := New(c, entry, Options{Logger: discardLogger(), Insecure: true})
 	g.Expect(err).ToNot(HaveOccurred())
@@ -172,8 +172,7 @@ func TestChartsMirror_VersionConstraint(t *testing.T) {
 		Source:      srcURL,
 		Destination: "oci://" + dst,
 		Name:        "podinfo",
-		Version:     ">=1.0.0 <2.0.0",
-		Limit:       new(0), // unlimited
+		Selector:    apiv1.Selector{Semver: ">=1.0.0 <2.0.0", Limit: new(0)}, // unlimited
 	}
 	mirror, err := New(c, entry, Options{Logger: discardLogger(), Insecure: true})
 	g.Expect(err).ToNot(HaveOccurred())
@@ -193,7 +192,7 @@ func TestChartsMirror_SkipsExisting(t *testing.T) {
 		Source:      srcURL,
 		Destination: "oci://" + dst,
 		Name:        "podinfo",
-		Limit:       new(1),
+		Selector:    apiv1.Selector{Limit: new(1)},
 	}
 	mirror, err := New(c, entry, Options{Logger: discardLogger(), Insecure: true})
 	g.Expect(err).ToNot(HaveOccurred())
@@ -227,7 +226,7 @@ func TestChartsMirror_DriftWithoutOverwrite(t *testing.T) {
 		Source:      srcURL,
 		Destination: "oci://" + dst,
 		Name:        "podinfo",
-		Limit:       new(1),
+		Selector:    apiv1.Selector{Limit: new(1)},
 	}
 	mirror, err := New(c, entry, Options{Logger: discardLogger(), Insecure: true})
 	g.Expect(err).ToNot(HaveOccurred())
@@ -252,7 +251,7 @@ func TestChartsMirror_DriftWithOverwrite(t *testing.T) {
 		Source:      srcURL,
 		Destination: "oci://" + dst,
 		Name:        "podinfo",
-		Limit:       new(1),
+		Selector:    apiv1.Selector{Limit: new(1)},
 	}
 	mirror, err := New(c, entry, Options{Overwrite: true, Logger: discardLogger(), Insecure: true})
 	g.Expect(err).ToNot(HaveOccurred())
@@ -277,7 +276,7 @@ func TestChartsMirror_DryRun(t *testing.T) {
 		Source:      srcURL,
 		Destination: "oci://" + dst,
 		Name:        "podinfo",
-		Limit:       new(0),
+		Selector:    apiv1.Selector{Limit: new(0)},
 	}
 	mirror, err := New(c, entry, Options{DryRun: true, Logger: discardLogger(), Insecure: true})
 	g.Expect(err).ToNot(HaveOccurred())

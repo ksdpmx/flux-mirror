@@ -92,8 +92,10 @@ const (
 	// Artifactory Helm repository over HTTP(S) (ArtifactEntry.DestinationType).
 	DestinationTypeArtifactory = "artifactory"
 
-	// defaultChartVersion is the chart version constraint applied when unset.
-	defaultChartVersion = "*"
+	// legacyChartVersion is the semver constraint a v1beta1 chart entry used when
+	// its version was unset. It is applied when converting v1beta1 configs so
+	// they keep excluding prereleases.
+	legacyChartVersion = "*"
 	// defaultLimit is the chart/selector limit applied when unset.
 	defaultLimit = 1
 
@@ -436,14 +438,12 @@ type ChartEntry struct {
 	// Name is the chart name.
 	Name string `json:"name"`
 
-	// Version is the semver constraint selecting which chart versions to mirror.
-	// +optional
-	Version string `json:"version,omitempty"`
-
-	// Limit caps how many matching versions are mirrored. 0 means unlimited.
-	// +optional
-	// +kubebuilder:validation:Minimum=0
-	Limit *int `json:"limit,omitempty"`
+	// Selector selects which chart versions to mirror. It is the same selector
+	// as ArtifactEntry.Selector: regex → semver → sort → top-N, applied to the
+	// version strings listed in the repository index (for example
+	// "1.2.3+build.5", not the OCI tag form "1.2.3_build.5"). Without semver no
+	// semver filter applies, so prereleases are included.
+	Selector Selector `json:"selector"`
 
 	// Overwrite re-mirrors versions that already exist at the destination.
 	// +optional
@@ -457,22 +457,6 @@ func (c ChartEntry) EffectiveDestinationType() string {
 		return DestinationTypeOCI
 	}
 	return c.DestinationType
-}
-
-// EffectiveVersion returns the version constraint with the documented default applied.
-func (c ChartEntry) EffectiveVersion() string {
-	if strings.TrimSpace(c.Version) == "" {
-		return defaultChartVersion
-	}
-	return c.Version
-}
-
-// EffectiveLimit returns the limit with the documented default applied.
-func (c ChartEntry) EffectiveLimit() int {
-	if c.Limit == nil {
-		return defaultLimit
-	}
-	return *c.Limit
 }
 
 // ArtifactEntry mirrors an OCI artifact (image, OCI chart, signed manifest, etc.).

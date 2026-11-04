@@ -25,8 +25,9 @@ charts:
   - source: https://charts.dexidp.io
     destination: oci://ghcr.io/example/charts
     name: dex
-    version: ">=0.19.0 <1.0.0"
-    limit: 5
+    selector:
+      semver: ">=0.19.0 <1.0.0"
+      limit: 5
 artifacts:
   - source: ghcr.io/dexidp/dex
     destination: ghcr.io/example/mirror/dex
@@ -56,7 +57,8 @@ artifacts:
 
 	g.Expect(cfg.Charts).To(HaveLen(1))
 	g.Expect(cfg.Charts[0].Name).To(Equal("dex"))
-	g.Expect(cfg.Charts[0].EffectiveLimit()).To(Equal(5))
+	g.Expect(cfg.Charts[0].Selector.Semver).To(Equal(">=0.19.0 <1.0.0"))
+	g.Expect(cfg.Charts[0].Selector.EffectiveLimit()).To(Equal(5))
 
 	g.Expect(cfg.Artifacts).To(HaveLen(2))
 	g.Expect(cfg.Artifacts[0].IncludeReferrers).To(BeTrue())
@@ -464,9 +466,11 @@ artifacts:
 func TestDefaults(t *testing.T) {
 	g := NewWithT(t)
 
+	// charts use the same selector, so they share its defaults.
 	c := ChartEntry{}
-	g.Expect(c.EffectiveVersion()).To(Equal("*"))
-	g.Expect(c.EffectiveLimit()).To(Equal(1))
+	g.Expect(c.Selector.EffectiveSortBy()).To(Equal(SortBySemver))
+	g.Expect(c.Selector.EffectiveLimit()).To(Equal(1))
+	g.Expect(c.EffectiveDestinationType()).To(Equal(DestinationTypeOCI))
 
 	s := Selector{}
 	g.Expect(s.EffectiveSortBy()).To(Equal(SortBySemver))
@@ -557,7 +561,7 @@ func TestValidate_Table(t *testing.T) {
 				TypeMeta: metav1.TypeMeta{APIVersion: GroupVersion.String(), Kind: ConfigKind},
 				Charts: []ChartEntry{{
 					Source: "https://charts.example.com", Destination: "oci://ghcr.io/x",
-					Name: "foo", Limit: new(0),
+					Name: "foo", Selector: Selector{Limit: new(0)},
 				}},
 			},
 		},
@@ -677,20 +681,36 @@ func TestValidate_Table(t *testing.T) {
 			errMsg: "destinationType \"nexus\" must be",
 		},
 		{
-			name: "chart bad version constraint",
+			name: "chart bad selector semver",
 			cfg: Config{TypeMeta: metav1.TypeMeta{APIVersion: GroupVersion.String(), Kind: ConfigKind}, Charts: []ChartEntry{{
 				Source: "https://charts.example.com", Destination: "oci://ghcr.io/x",
-				Name: "foo", Version: "not-a-semver",
+				Name: "foo", Selector: Selector{Semver: "not-a-semver"},
 			}}},
-			errMsg: "valid semver constraint",
+			errMsg: "selector: semver",
 		},
 		{
-			name: "chart negative limit",
+			name: "chart negative selector limit",
 			cfg: Config{TypeMeta: metav1.TypeMeta{APIVersion: GroupVersion.String(), Kind: ConfigKind}, Charts: []ChartEntry{{
 				Source: "https://charts.example.com", Destination: "oci://ghcr.io/x",
-				Name: "foo", Limit: &negOne,
+				Name: "foo", Selector: Selector{Limit: &negOne},
 			}}},
-			errMsg: "limit must be >= 0",
+			errMsg: "selector: limit must be >= 0",
+		},
+		{
+			name: "chart selector bad regex",
+			cfg: Config{TypeMeta: metav1.TypeMeta{APIVersion: GroupVersion.String(), Kind: ConfigKind}, Charts: []ChartEntry{{
+				Source: "https://charts.example.com", Destination: "oci://ghcr.io/x",
+				Name: "foo", Selector: Selector{Regex: &RegexFilter{Pattern: "(unclosed"}},
+			}}},
+			errMsg: "selector: regex.pattern",
+		},
+		{
+			name: "chart selector bad sortBy",
+			cfg: Config{TypeMeta: metav1.TypeMeta{APIVersion: GroupVersion.String(), Kind: ConfigKind}, Charts: []ChartEntry{{
+				Source: "https://charts.example.com", Destination: "oci://ghcr.io/x",
+				Name: "foo", Selector: Selector{SortBy: "newest"},
+			}}},
+			errMsg: "selector: sortBy",
 		},
 		{
 			name: "chart missing name",
