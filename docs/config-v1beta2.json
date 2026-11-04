@@ -143,10 +143,18 @@
       "description": "Charts lists Helm charts to mirror from an HTTP/S repository into an OCI\nregistry. Mirroring a chart that already lives in an OCI registry is an\nOCI-to-OCI copy; configure it under Artifacts instead.",
       "items": {
         "additionalProperties": false,
-        "description": "ChartEntry mirrors a Helm chart from an HTTP/S repository to an OCI\ndestination. To mirror a chart that is already in an OCI registry, use an\nArtifactEntry instead (an OCI Helm chart is mirrored as a plain OCI artifact).",
+        "description": "ChartEntry mirrors a Helm chart from an HTTP/S repository to an OCI\nregistry or to a JFrog Artifactory Helm repository. To mirror a chart that is\nalready in an OCI registry, use an ArtifactEntry instead (an OCI Helm chart is\nmirrored as a plain OCI artifact).",
         "properties": {
           "destination": {
-            "description": "Destination is the OCI repository URL the chart is mirrored to.",
+            "description": "Destination is where the chart is mirrored to. For DestinationType \"oci\"\nit is an OCI repository (the oci:// prefix is optional) and the chart name\nis appended. For \"artifactory\" it is the directory URL of a Helm repository\n(scheme optional, https by default); the chart name is not appended and the\nfile name (\u003cname\u003e-\u003cversion\u003e.tgz) is added automatically.",
+            "type": "string"
+          },
+          "destinationType": {
+            "description": "DestinationType selects the kind of destination: \"oci\" publishes the chart\nas an OCI Helm chart, \"artifactory\" uploads the chart .tgz to a JFrog\nArtifactory Helm repository. Defaults to \"oci\".",
+            "enum": [
+              "oci",
+              "artifactory"
+            ],
             "type": "string"
           },
           "limit": {

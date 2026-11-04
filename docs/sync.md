@@ -61,7 +61,11 @@ connections: a directory or inline PEM values with a custom CA and/or client
 certificate, or SPIFFE mutual TLS.
 
 With the default registry transport, `--insecure` skips TLS verification for OCI
-requests, including chart destinations and referrer lookups.
+requests, including chart destinations and referrer lookups. It also allows a
+plaintext `http://` Helm repository: a `charts[].source` (or an Artifactory
+destination) written with `http://` fails that entry without it. An HTTP/S Helm
+source is never TLS-skipped by `--insecure`; use `insecure_skip_tls_verify` in the
+Helm repositories config for that.
 
 Provider credentials obtained from a cloud registry provider or a `credential`
 token source are cached for the duration of the sync run. This avoids minting a
@@ -79,7 +83,9 @@ auth and always comes from the ambient Helm repositories config:
 Add repositories with `helm repo add` and `flux mirror` picks up matching HTTP/S
 repository credentials automatically.
 
-`artifacts` entries with [`destinationType: artifactory`](config.md#publishing-to-a-helm-repository)
+`artifacts` and `charts` entries with `destinationType: artifactory`
+([artifacts](config.md#publishing-to-a-helm-repository),
+[charts](config.md#publishing-charts-to-a-helm-repository))
 authenticate to the Helm repository through [`hosts`](config.md#hosts) instead:
 a `credential` without `username` is sent as a bearer token and one with
 `username` as Basic auth. Only hosts with `direction` `destination` or `both`
@@ -99,7 +105,7 @@ hosts are not supported.
 | `--dry-run`                     | `false` | Run the plan and comparison pipeline without performing any writes. Reported as `would-copy` / `would-overwrite`.                   |
 | `--verbose`                     | `false` | Log every operation and the involved digests on stderr. Suppresses the spinner.                                                     |
 | `--no-progress`                 | `false` | Disable the live progress spinner. Per-job lines and the summary still print.                                                       |
-| `--insecure`                    | `false` | Allow plaintext HTTP and skip TLS verification. Test/dev only. Also permits `http://` Helm repository destinations.                |
+| `--insecure`                    | `false` | Allow plaintext HTTP and skip TLS verification. Test/dev only. Also permits `http://` Helm repository sources (`charts[].source`) and destinations. |
 | `--token-cache-max-size N`      | `100`   | Maximum number of provider credentials cached. Set to `0` to disable the cache.                                                     |
 | `--token-cache-max-duration DURATION` | `1h` | Maximum duration a cached provider token is reused before it is refreshed.                                                         |
 
@@ -321,6 +327,34 @@ artifacts:
 ```
 
 See [Publishing to a Helm repository](config.md#publishing-to-a-helm-repository).
+
+### Mirror an HTTP/S Helm repository into an Artifactory Helm repository
+
+To copy charts from one classic Helm repository to a JFrog Artifactory Helm
+repository, list them under [`charts`](config.md#charts) with
+`destinationType: artifactory`. Each selected version is downloaded from the
+source and uploaded as `<name>-<version>.tgz` to the directory in `destination`
+(the chart name is not appended).
+
+```yaml
+apiVersion: mirror.plugin.fluxcd.io/v1beta2
+kind: Config
+hosts:
+  - host: example.jfrog.io
+    credential:
+      value: ${JFROG_TOKEN}
+charts:
+  - name: aws-vpc-cni
+    source: https://aws.github.io/eks-charts
+    destination: example.jfrog.io/artifactory/helm-local/aws-vpc-cni
+    destinationType: artifactory
+    version: ">=1.20.0"
+    limit: 3
+```
+
+Run it with `--dry-run` first: it reads the destination (a `HEAD` per version)
+but uploads nothing. See
+[Publishing charts to a Helm repository](config.md#publishing-charts-to-a-helm-repository).
 
 ### Mirror images from GHCR into a private registry
 

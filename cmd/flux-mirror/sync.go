@@ -260,6 +260,9 @@ func syncCmdRun(cmd *cobra.Command, args []string) error {
 			DryRun:    syncArgs.dryRun,
 			Verbose:   syncArgs.verbose,
 			Logger:    logger,
+			Hosts:     registryauth.HostsForDirection(cfg.Hosts, apiv1.DirectionDestination),
+			Transport: destTransport,
+			Insecure:  syncArgs.insecure,
 		})
 		if err != nil {
 			return fmt.Errorf("build chart entry %s/%s: %w", e.Source, e.Name, err)

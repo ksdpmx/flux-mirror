@@ -5,14 +5,9 @@ package artifacts
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"io"
 	"log/slog"
-	"net/http"
-	"net/http/httptest"
-	gosync "sync"
 	"testing"
 
 	. "github.com/onsi/gomega"
@@ -25,44 +20,15 @@ import (
 
 const fixtureChart = "../helmrepo/testdata/podinfo"
 
-// fakeHelmRepo mimics the Artifactory behaviors the Helm repo pusher relies on.
-type fakeHelmRepo struct {
-	mu    gosync.Mutex
-	files map[string][]byte
-	puts  int
-}
-
-func newFakeHelmRepo(t *testing.T) (*fakeHelmRepo, string) {
+func newFakeHelmRepo(t *testing.T) (*testregistry.FakeArtifactory, string) {
 	t.Helper()
-	f := &fakeHelmRepo{files: map[string][]byte{}}
-	srv := httptest.NewServer(f)
-	t.Cleanup(srv.Close)
-	return f, srv.URL
+	return testregistry.StartFakeArtifactory(t)
 }
 
-func (f *fakeHelmRepo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	data, ok := f.files[r.URL.Path]
-	switch r.Method {
-	case http.MethodHead:
-		if !ok {
-			http.NotFound(w, r)
-			return
-		}
-		s := sha256.Sum256(data)
-		w.Header().Set("X-Checksum-Sha256", hex.EncodeToString(s[:]))
-	case http.MethodPut:
-		body, _ := io.ReadAll(r.Body)
-		s := sha256.Sum256(body)
-		if r.Header.Get("X-Checksum-Sha256") != hex.EncodeToString(s[:]) {
-			http.Error(w, "checksum mismatch", http.StatusConflict)
-			return
-		}
-		f.files[r.URL.Path] = body
-		f.puts++
-		w.WriteHeader(http.StatusCreated)
-	}
+// stored returns the bytes the fake repository holds at path, or nil.
+func stored(f *testregistry.FakeArtifactory, path string) []byte {
+	data, _ := f.Get(path)
+	return data
 }
 
 func pushChartFixture(t *testing.T, c *oci.Client, ref, version string) []byte {
@@ -108,31 +74,31 @@ func TestMirror_ChartToHelmRepo(t *testing.T) {
 	dry.DryRun = true
 	e := run(entry, dry)
 	g.Expect(tagsWithStatus(e, apiv1.StatusWouldCopy)).To(HaveLen(2))
-	g.Expect(fake.files).To(BeEmpty())
+	g.Expect(fake.Paths()).To(BeEmpty())
 
 	// First real run copies both versions.
 	e = run(entry, helmOpts())
 	g.Expect(tagsWithStatus(e, apiv1.StatusCopied)).To(HaveLen(2))
-	g.Expect(fake.files).To(HaveKeyWithValue("/helm-local/team/podinfo-1.0.0.tgz", tgz1))
-	g.Expect(fake.files).To(HaveKey("/helm-local/team/podinfo-1.1.0.tgz"))
+	g.Expect(stored(fake, "/helm-local/team/podinfo-1.0.0.tgz")).To(Equal(tgz1))
+	g.Expect(fake.Paths()).To(ContainElement("/helm-local/team/podinfo-1.1.0.tgz"))
 
 	// Second run is a no-op.
-	puts := fake.puts
+	puts := fake.Puts()
 	e = run(entry, helmOpts())
 	g.Expect(tagsWithStatus(e, apiv1.StatusSkipped)).To(HaveLen(2))
-	g.Expect(fake.puts).To(Equal(puts))
+	g.Expect(fake.Puts()).To(Equal(puts))
 
 	// A drifted destination is left alone without overwrite...
-	fake.files["/helm-local/team/podinfo-1.0.0.tgz"] = []byte("tampered")
+	fake.Set("/helm-local/team/podinfo-1.0.0.tgz", []byte("tampered"))
 	e = run(entry, helmOpts())
 	g.Expect(tagsWithStatus(e, apiv1.StatusDrifted)).To(HaveLen(1))
-	g.Expect(fake.files["/helm-local/team/podinfo-1.0.0.tgz"]).To(Equal([]byte("tampered")))
+	g.Expect(stored(fake, "/helm-local/team/podinfo-1.0.0.tgz")).To(Equal([]byte("tampered")))
 
 	// ...and replaced with overwrite.
 	entry.Overwrite = true
 	e = run(entry, helmOpts())
 	g.Expect(tagsWithStatus(e, apiv1.StatusOverwritten)).To(HaveLen(1))
-	g.Expect(fake.files["/helm-local/team/podinfo-1.0.0.tgz"]).To(Equal(tgz1))
+	g.Expect(stored(fake, "/helm-local/team/podinfo-1.0.0.tgz")).To(Equal(tgz1))
 }
 
 func TestMirror_ChartToHelmRepoRejectsImage(t *testing.T) {
@@ -165,7 +131,7 @@ func TestMirror_ChartToHelmRepoVersionMismatchFailsOnlyThatTag(t *testing.T) {
 	g.Expect(failed).To(HaveLen(1))
 	g.Expect(failed[0].Tag).To(Equal("2.0.0"))
 	g.Expect(failed[0].Error).To(ContainSubstring("does not match tag"))
-	g.Expect(fake.files).To(HaveLen(1))
+	g.Expect(fake.Paths()).To(HaveLen(1))
 }
 
 func TestMirror_ChartToHelmRepoRejectsProviderHost(t *testing.T) {
@@ -209,10 +175,10 @@ func TestMirror_ChartToHelmRepoVerify(t *testing.T) {
 	res, err := newRunner().Run(context.Background(), []sync.EntryMirror{New(c, entry, opts(ok))})
 	g.Expect(err).ToNot(HaveOccurred())
 	g.Expect(tagsWithStatus(res.Entries[0], apiv1.StatusCopied)).To(HaveLen(1))
-	g.Expect(fake.files).To(HaveKey("/helm-local/team/podinfo-1.0.0.tgz"))
+	g.Expect(fake.Paths()).To(ContainElement("/helm-local/team/podinfo-1.0.0.tgz"))
 
 	// A verify failure becomes a failed tag row and nothing more is uploaded.
-	fake.files = map[string][]byte{}
+	fake.Reset()
 	denied := &recordingVerifier{err: errors.New("denied")}
 	plan, err = New(c, entry, opts(denied)).Plan(context.Background())
 	g.Expect(err).ToNot(HaveOccurred())
@@ -223,5 +189,5 @@ func TestMirror_ChartToHelmRepoVerify(t *testing.T) {
 	failed := tagsWithStatus(res.Entries[0], apiv1.StatusFailed)
 	g.Expect(failed).To(HaveLen(1))
 	g.Expect(failed[0].Error).To(ContainSubstring("denied"))
-	g.Expect(fake.files).To(BeEmpty())
+	g.Expect(fake.Paths()).To(BeEmpty())
 }

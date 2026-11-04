@@ -388,6 +388,20 @@ func TestSync_InsecureRegistryTLS(t *testing.T) {
 	g.Expect(helm.GenerateIndex()).To(Succeed())
 	helm.Start()
 
+	// The chart source must be https (plaintext http needs --insecure, which
+	// would also skip the destination's TLS verification this test is about).
+	// Trust its certificate through Helm's repositories config.
+	helmBackend, err := url.Parse(helm.URL())
+	g.Expect(err).ToNot(HaveOccurred())
+	helmTLS := httptest.NewTLSServer(httputil.NewSingleHostReverseProxy(helmBackend))
+	t.Cleanup(helmTLS.Close)
+	helmCA := filepath.Join(t.TempDir(), "helm-ca.pem")
+	g.Expect(os.WriteFile(helmCA, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: helmTLS.Certificate().Raw}), 0o600)).To(Succeed())
+	helmRepos := filepath.Join(t.TempDir(), "repositories.yaml")
+	g.Expect(os.WriteFile(helmRepos, []byte(fmt.Sprintf(
+		"apiVersion: v1\nrepositories:\n- name: tls\n  url: %s\n  caFile: %s\n", helmTLS.URL, helmCA)), 0o600)).To(Succeed())
+	t.Setenv("HELM_REPOSITORY_CONFIG", helmRepos)
+
 	for _, tt := range []struct {
 		name  string
 		entry string
@@ -413,7 +427,7 @@ func TestSync_InsecureRegistryTLS(t *testing.T) {
   - name: podinfo
     source: %s
     destination: oci://%s/tls-charts
-`, helm.URL(), tlsHost),
+`, helmTLS.URL, tlsHost),
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

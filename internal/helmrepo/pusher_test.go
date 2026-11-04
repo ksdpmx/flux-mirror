@@ -7,73 +7,19 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	gosync "sync"
 	"testing"
 
 	. "github.com/onsi/gomega"
+
+	"github.com/fluxcd/flux-mirror/internal/testregistry"
 )
-
-// fakeArtifactory is a minimal in-memory Helm repo directory that mimics the
-// Artifactory behaviors the Pusher relies on.
-type fakeArtifactory struct {
-	mu             gosync.Mutex
-	files          map[string][]byte
-	reportChecksum bool
-	forbidPut      bool
-	lastAuth       string
-}
-
-func newFakeArtifactory(t *testing.T) (*fakeArtifactory, *httptest.Server) {
-	t.Helper()
-	f := &fakeArtifactory{files: map[string][]byte{}, reportChecksum: true}
-	srv := httptest.NewServer(f)
-	t.Cleanup(srv.Close)
-	return f, srv
-}
 
 func sum(b []byte) string {
 	s := sha256.Sum256(b)
 	return hex.EncodeToString(s[:])
-}
-
-func (f *fakeArtifactory) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.lastAuth = r.Header.Get("Authorization")
-	data, ok := f.files[r.URL.Path]
-	switch r.Method {
-	case http.MethodHead, http.MethodGet:
-		if !ok {
-			http.NotFound(w, r)
-			return
-		}
-		if f.reportChecksum {
-			w.Header().Set("X-Checksum-Sha256", sum(data))
-		}
-		if r.Method == http.MethodGet {
-			_, _ = w.Write(data)
-		}
-	case http.MethodPut:
-		if f.forbidPut {
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
-		}
-		body, _ := io.ReadAll(r.Body)
-		if want := r.Header.Get("X-Checksum-Sha256"); want != sum(body) {
-			http.Error(w, "checksum mismatch", http.StatusConflict)
-			return
-		}
-		if int64(len(body)) != r.ContentLength {
-			http.Error(w, "bad length", http.StatusBadRequest)
-			return
-		}
-		f.files[r.URL.Path] = body
-		w.WriteHeader(http.StatusCreated)
-	}
 }
 
 func TestNormalizeDestination(t *testing.T) {
@@ -125,8 +71,8 @@ func TestPusher_ChartURLRejectsUnsafeNames(t *testing.T) {
 
 func TestPusher_PutAndStat(t *testing.T) {
 	g := NewWithT(t)
-	f, srv := newFakeArtifactory(t)
-	p, err := NewPusher(srv.URL+"/helm-local/team", true)
+	f, url := testregistry.StartFakeArtifactory(t)
+	p, err := NewPusher(url+"/helm-local/team", true)
 	g.Expect(err).ToNot(HaveOccurred())
 	ctx := context.Background()
 
@@ -136,7 +82,9 @@ func TestPusher_PutAndStat(t *testing.T) {
 
 	body := []byte("chart-bytes")
 	g.Expect(p.Put(ctx, "podinfo", "1.0.0", strings.NewReader(string(body)), int64(len(body)), "sha256:"+sum(body))).To(Succeed())
-	g.Expect(f.files).To(HaveKeyWithValue("/helm-local/team/podinfo-1.0.0.tgz", body))
+	stored, ok := f.Get("/helm-local/team/podinfo-1.0.0.tgz")
+	g.Expect(ok).To(BeTrue())
+	g.Expect(stored).To(Equal(body))
 
 	got, err = p.Stat(ctx, "podinfo", "1.0.0")
 	g.Expect(err).ToNot(HaveOccurred())
@@ -145,10 +93,10 @@ func TestPusher_PutAndStat(t *testing.T) {
 
 func TestPusher_StatFallsBackToHashingWithoutChecksumHeader(t *testing.T) {
 	g := NewWithT(t)
-	f, srv := newFakeArtifactory(t)
-	f.reportChecksum = false
-	f.files["/helm/podinfo-1.0.0.tgz"] = []byte("abc")
-	p, err := NewPusher(srv.URL+"/helm", true)
+	f, url := testregistry.StartFakeArtifactory(t)
+	f.NoChecksumHeader = true
+	f.Set("/helm/podinfo-1.0.0.tgz", []byte("abc"))
+	p, err := NewPusher(url+"/helm", true)
 	g.Expect(err).ToNot(HaveOccurred())
 
 	got, err := p.Stat(context.Background(), "podinfo", "1.0.0")
@@ -158,9 +106,9 @@ func TestPusher_StatFallsBackToHashingWithoutChecksumHeader(t *testing.T) {
 
 func TestPusher_PutForbiddenHintsAtOverwrite(t *testing.T) {
 	g := NewWithT(t)
-	f, srv := newFakeArtifactory(t)
-	f.forbidPut = true
-	p, err := NewPusher(srv.URL+"/helm", true)
+	f, url := testregistry.StartFakeArtifactory(t)
+	f.ForbidPut = true
+	p, err := NewPusher(url+"/helm", true)
 	g.Expect(err).ToNot(HaveOccurred())
 
 	body := []byte("x")
@@ -186,8 +134,8 @@ func TestPusher_PutNotFoundHintsAtContextPath(t *testing.T) {
 
 func TestPusher_PutRejectsBadChecksumServerSide(t *testing.T) {
 	g := NewWithT(t)
-	_, srv := newFakeArtifactory(t)
-	p, err := NewPusher(srv.URL+"/helm", true)
+	_, url := testregistry.StartFakeArtifactory(t)
+	p, err := NewPusher(url+"/helm", true)
 	g.Expect(err).ToNot(HaveOccurred())
 
 	err = p.Put(context.Background(), "podinfo", "1.0.0", strings.NewReader("x"), 1, "sha256:"+sum([]byte("other")))
@@ -196,8 +144,8 @@ func TestPusher_PutRejectsBadChecksumServerSide(t *testing.T) {
 
 func TestPusher_BasicAuth(t *testing.T) {
 	g := NewWithT(t)
-	f, srv := newFakeArtifactory(t)
-	p, err := NewPusher(srv.URL+"/helm", true, WithBasicAuth(func(context.Context) (string, string, error) {
+	f, url := testregistry.StartFakeArtifactory(t)
+	p, err := NewPusher(url+"/helm", true, WithBasicAuth(func(context.Context) (string, string, error) {
 		return "bob", "secret", nil
 	}))
 	g.Expect(err).ToNot(HaveOccurred())
@@ -206,5 +154,5 @@ func TestPusher_BasicAuth(t *testing.T) {
 	g.Expect(err).ToNot(HaveOccurred())
 	req, _ := http.NewRequest(http.MethodGet, "http://x", nil)
 	req.SetBasicAuth("bob", "secret")
-	g.Expect(f.lastAuth).To(Equal(req.Header.Get("Authorization")))
+	g.Expect(f.LastAuth()).To(Equal(req.Header.Get("Authorization")))
 }

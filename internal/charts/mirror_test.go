@@ -117,7 +117,7 @@ func TestChartsMirror_CopiesTopN(t *testing.T) {
 		Name:        "podinfo",
 		Limit:       new(2),
 	}
-	mirror, err := New(c, entry, Options{Logger: discardLogger()})
+	mirror, err := New(c, entry, Options{Logger: discardLogger(), Insecure: true})
 	g.Expect(err).ToNot(HaveOccurred())
 
 	res, err := newRunner().Run(context.Background(), []sync.EntryMirror{mirror})
@@ -135,6 +135,33 @@ func TestChartsMirror_CopiesTopN(t *testing.T) {
 	g.Expect(tags).To(ConsistOf("1.0.0", "1.1.0"))
 }
 
+func TestChartsMirror_OCIDestinationWithoutScheme(t *testing.T) {
+	g := NewWithT(t)
+	srcURL := newHTTPHelmRepo(t, "1.0.0")
+	dst := testregistry.Repo(dockerReg, "charts-noscheme")
+
+	c := oci.NewClient(oci.Insecure())
+	// The oci:// prefix is optional: both spellings land in the same repository.
+	for _, destination := range []string{dst, "oci://" + dst} {
+		entry := apiv1.ChartEntry{Source: srcURL, Destination: destination, Name: "podinfo"}
+		m, err := New(c, entry, Options{Logger: discardLogger(), Insecure: true})
+		g.Expect(err).ToNot(HaveOccurred())
+		plan, err := m.Plan(context.Background())
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(plan.Destination).To(Equal(dst + "/podinfo"))
+	}
+
+	m, err := New(c, apiv1.ChartEntry{Source: srcURL, Destination: dst, Name: "podinfo"},
+		Options{Logger: discardLogger(), Insecure: true})
+	g.Expect(err).ToNot(HaveOccurred())
+	res, err := newRunner().Run(context.Background(), []sync.EntryMirror{m})
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(versionsWithStatus(res.Entries[0], apiv1.StatusCopied)).To(ConsistOf("1.0.0"))
+	tags, err := c.ListTags(context.Background(), dst+"/podinfo")
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(tags).To(ConsistOf("1.0.0"))
+}
+
 func TestChartsMirror_VersionConstraint(t *testing.T) {
 	g := NewWithT(t)
 	srcURL := newHTTPHelmRepo(t, "0.1.0", "1.0.0", "1.1.0", "2.0.0")
@@ -148,7 +175,7 @@ func TestChartsMirror_VersionConstraint(t *testing.T) {
 		Version:     ">=1.0.0 <2.0.0",
 		Limit:       new(0), // unlimited
 	}
-	mirror, err := New(c, entry, Options{Logger: discardLogger()})
+	mirror, err := New(c, entry, Options{Logger: discardLogger(), Insecure: true})
 	g.Expect(err).ToNot(HaveOccurred())
 
 	res, err := newRunner().Run(context.Background(), []sync.EntryMirror{mirror})
@@ -168,7 +195,7 @@ func TestChartsMirror_SkipsExisting(t *testing.T) {
 		Name:        "podinfo",
 		Limit:       new(1),
 	}
-	mirror, err := New(c, entry, Options{Logger: discardLogger()})
+	mirror, err := New(c, entry, Options{Logger: discardLogger(), Insecure: true})
 	g.Expect(err).ToNot(HaveOccurred())
 
 	runner := newRunner()
@@ -202,7 +229,7 @@ func TestChartsMirror_DriftWithoutOverwrite(t *testing.T) {
 		Name:        "podinfo",
 		Limit:       new(1),
 	}
-	mirror, err := New(c, entry, Options{Logger: discardLogger()})
+	mirror, err := New(c, entry, Options{Logger: discardLogger(), Insecure: true})
 	g.Expect(err).ToNot(HaveOccurred())
 
 	res, err := newRunner().Run(context.Background(), []sync.EntryMirror{mirror})
@@ -227,7 +254,7 @@ func TestChartsMirror_DriftWithOverwrite(t *testing.T) {
 		Name:        "podinfo",
 		Limit:       new(1),
 	}
-	mirror, err := New(c, entry, Options{Overwrite: true, Logger: discardLogger()})
+	mirror, err := New(c, entry, Options{Overwrite: true, Logger: discardLogger(), Insecure: true})
 	g.Expect(err).ToNot(HaveOccurred())
 
 	res, err := newRunner().Run(context.Background(), []sync.EntryMirror{mirror})
@@ -252,7 +279,7 @@ func TestChartsMirror_DryRun(t *testing.T) {
 		Name:        "podinfo",
 		Limit:       new(0),
 	}
-	mirror, err := New(c, entry, Options{DryRun: true, Logger: discardLogger()})
+	mirror, err := New(c, entry, Options{DryRun: true, Logger: discardLogger(), Insecure: true})
 	g.Expect(err).ToNot(HaveOccurred())
 
 	res, err := newRunner().Run(context.Background(), []sync.EntryMirror{mirror})

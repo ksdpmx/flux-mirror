@@ -431,14 +431,26 @@ type SPIFFETLS struct {
 }
 
 // ChartEntry mirrors a Helm chart from an HTTP/S repository to an OCI
-// destination. To mirror a chart that is already in an OCI registry, use an
-// ArtifactEntry instead (an OCI Helm chart is mirrored as a plain OCI artifact).
+// registry or to a JFrog Artifactory Helm repository. To mirror a chart that is
+// already in an OCI registry, use an ArtifactEntry instead (an OCI Helm chart is
+// mirrored as a plain OCI artifact).
 type ChartEntry struct {
 	// Source is the HTTP/S repository URL the chart is mirrored from.
 	Source string `json:"source"`
 
-	// Destination is the OCI repository URL the chart is mirrored to.
+	// Destination is where the chart is mirrored to. For DestinationType "oci"
+	// it is an OCI repository (the oci:// prefix is optional) and the chart name
+	// is appended. For "artifactory" it is the directory URL of a Helm repository
+	// (scheme optional, https by default); the chart name is not appended and the
+	// file name (<name>-<version>.tgz) is added automatically.
 	Destination string `json:"destination"`
+
+	// DestinationType selects the kind of destination: "oci" publishes the chart
+	// as an OCI Helm chart, "artifactory" uploads the chart .tgz to a JFrog
+	// Artifactory Helm repository. Defaults to "oci".
+	// +optional
+	// +kubebuilder:validation:Enum=oci;artifactory
+	DestinationType string `json:"destinationType,omitempty"`
 
 	// Name is the chart name.
 	Name string `json:"name"`
@@ -455,6 +467,15 @@ type ChartEntry struct {
 	// Overwrite re-mirrors versions that already exist at the destination.
 	// +optional
 	Overwrite bool `json:"overwrite,omitempty"`
+}
+
+// EffectiveDestinationType returns the destination type with the documented
+// default applied.
+func (c ChartEntry) EffectiveDestinationType() string {
+	if strings.TrimSpace(c.DestinationType) == "" {
+		return DestinationTypeOCI
+	}
+	return c.DestinationType
 }
 
 // EffectiveVersion returns the version constraint with the documented default applied.

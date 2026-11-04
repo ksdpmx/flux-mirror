@@ -525,8 +525,18 @@ func validateChartEntry(c apiv1.ChartEntry) error {
 	if err := validateChartSource(c.Source); err != nil {
 		return fmt.Errorf("source: %w", err)
 	}
-	if err := validateOCIURL(c.Destination); err != nil {
-		return fmt.Errorf("destination: %w", err)
+	switch c.EffectiveDestinationType() {
+	case apiv1.DestinationTypeOCI:
+		if err := validateOCIURL(c.Destination); err != nil {
+			return fmt.Errorf("destination: %w", err)
+		}
+	case apiv1.DestinationTypeArtifactory:
+		if _, err := helmrepo.NormalizeDestination(c.Destination); err != nil {
+			return fmt.Errorf("destination: %w", err)
+		}
+	default:
+		return fmt.Errorf("destinationType %q must be %q or %q", c.DestinationType,
+			apiv1.DestinationTypeOCI, apiv1.DestinationTypeArtifactory)
 	}
 	if _, err := semver.NewConstraint(c.EffectiveVersion()); err != nil {
 		return fmt.Errorf("version %q is not a valid semver constraint: %w", c.EffectiveVersion(), err)
@@ -620,30 +630,22 @@ func validateSelector(s apiv1.Selector) error {
 }
 
 func validateChartSource(s string) error {
-	if strings.TrimSpace(s) == "" {
-		return fmt.Errorf("source is required")
-	}
-	u, err := url.Parse(s)
-	if err != nil {
-		return fmt.Errorf("invalid URL: %w", err)
-	}
-	switch u.Scheme {
-	case "http", "https":
-	default:
-		return fmt.Errorf("scheme %q must be one of: http, https "+
-			"(use 'artifacts' to mirror an OCI Helm chart to another OCI repository)", u.Scheme)
-	}
-	if u.Host == "" {
-		return fmt.Errorf("URL %q is missing a host", s)
-	}
-	return nil
+	_, err := helmrepo.NormalizeSource(s)
+	return err
 }
 
+// validateOCIURL checks a charts destination for destinationType "oci". The
+// oci:// scheme is optional and filled in when omitted; any other scheme is an
+// error.
 func validateOCIURL(s string) error {
-	if strings.TrimSpace(s) == "" {
+	raw := strings.TrimSpace(s)
+	if raw == "" {
 		return fmt.Errorf("destination is required")
 	}
-	u, err := url.Parse(s)
+	if !strings.Contains(raw, "://") {
+		raw = "oci://" + raw
+	}
+	u, err := url.Parse(raw)
 	if err != nil {
 		return fmt.Errorf("invalid URL: %w", err)
 	}
@@ -651,7 +653,7 @@ func validateOCIURL(s string) error {
 		return fmt.Errorf("scheme must be oci://, got %q", u.Scheme)
 	}
 	if u.Host == "" {
-		return fmt.Errorf("URL %q is missing a host", s)
+		return fmt.Errorf("URL %q is missing a host", raw)
 	}
 	return nil
 }
