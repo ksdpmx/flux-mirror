@@ -6,42 +6,31 @@ repository); see
 [Publishing to a Helm repository](config.md#publishing-to-a-helm-repository) and
 [Publishing charts to a Helm repository](config.md#publishing-charts-to-a-helm-repository).
 `artifacts` and `charts` were both checked against a real JFrog instance.
+`charts` selects versions with the same `selector` as `artifacts`
+(`charts[].version` and `charts[].limit` were removed, a breaking change for
+v1beta2 configs; v1beta1 configs are converted automatically).
 This file tracks what is still open.
 
-## Open: charts selector
+## Open: charts follow-ups
 
-Next, now that `charts` can publish to Artifactory: the `selector` refactor.
-
-- **C0.** Align `charts` version selection with `artifacts` by adding
-  `charts[].selector`, the same `Selector` type and `validateSelector` as
-  `artifacts` (`regex.pattern`, `regex.extract`, `semver`, `sortBy`, `limit`).
-  - `charts[].version` is kept but deprecated: it is an alias for
-    `selector.semver`. Setting both `version` and `selector.semver` is a
-    validation error. The flat `limit` is kept the same way, as an alias for
-    `selector.limit` (inferred, not explicitly agreed); setting both is an
-    error.
-  - Defaults, deliberately different depending on whether `selector` is set:
-    - With `selector`: identical to `artifacts`. No `semver` means no semver
-      filter, so prereleases are included (and the default `limit: 1` can pick a
-      release candidate). Document this in `docs/config.md`.
-    - Without `selector` (existing configs): unchanged legacy behavior,
-      `version` defaults to `"*"` and excludes prereleases.
-  - Plan: use the entry's selector in `internal/charts/mirror.go` (today it
-    builds `Selector{Semver: version, Limit}` only), validate in
-    `internal/config`, `make generate`, docs, tests (regex with `extract`,
-    prerelease with and without `selector`, alias conflicts).
-  - Resolves the `charts` half of T5.
 - **C4.** `artifacts` with `destinationType: artifactory` takes the file name
   from the OCI config blob and only compares `version` with the tag. It does not
   check `name`, nor compare the blob with the tarball (the tarball is streamed).
   `charts` now checks both against `Chart.yaml` before an upload; consider a
   `name` check for `artifacts` too.
+- **C5.** Migrate the internal `sk8s-flux-mirror` Helm chart (`4054-sk8s-modules`)
+  to `charts[].selector`: it renders `charts[].version` / `limit`, which the
+  v1beta2 config now rejects (`unknown field`). Update its templates,
+  `tests/configmap_charts_test.yaml`, and snapshots together with the image bump.
+  Its current override only uses `artifacts`, so nothing is broken until `charts`
+  entries are added.
 - Out of scope for the above: B1 (source auth via `hosts`), B2, B3, T5's
   `artifacts` default, V8.
 
 ## Follow-ups from real-world testing
 
-- **T1.** A wrong repository path is not caught by `--dry-run`: a `HEAD` 404
+- **T1.** A wrong repository path is not caught by `--dry-run`, for `artifacts`
+  and `charts` with `destinationType: artifactory`: a `HEAD` 404
   means "file absent", so dry-run reports `would-copy` and the failure only
   shows at `PUT` (for example a missing `/artifactory` context path). The `PUT`
   404 now carries a hint; probing the repository in `Plan` would surface it
@@ -74,29 +63,23 @@ Next, now that `charts` can publish to Artifactory: the `selector` refactor.
     `time=… level=INFO msg="…" k=v` with RFC3339 times, and `docs/sync.md`
     examples and tests would need updating. crane's own progress lines would
     still be plain `log` lines in text mode.
-- **T4.** With `destinationType: artifactory`, a host `credential` that sets
+- **T4.** With `destinationType: artifactory` (`artifacts` and `charts`, which
+  share `helmrepo.NewPusherForHosts`), a host `credential` that sets
   `username` is resolved through `registryauth.ResolveHostAuth` on every HTTP
   request. A `credential.provider` token source (for example `github`) therefore
   mints a new token per `HEAD`/`PUT`, bypassing the sync token cache, which only
   covers cloud `provider` hosts. Static `value`/`fromPath` and the bearer path
   (no `username`) are unaffected. Resolve once per entry or route it through the
   token cache.
-- **T5.** `charts` and `artifacts` select versions differently, so prerelease
-  handling is inconsistent:
-  - `charts[].version` defaults to `"*"`, so the semver constraint always
-    applies and prereleases are excluded. Only a constraint with a prerelease
-    suffix (for example `">=1.0.0-0"`) includes them. `charts` has no regex,
-    `sortBy`, or `selector`.
-  - `artifacts[].selector.semver` has no default, so with no `semver` and no
-    `regex` every tag that parses as semver is kept, prereleases included. Sorted
-    by semver, `1.2.0-rc.1` ranks above `1.1.0`, so the default `limit: 1` picks
-    the release candidate. Adding `semver: "*"` or a `regex` excludes it.
-  - Decide whether to align the two (for example default `artifacts` to exclude
-    prereleases, add an explicit opt-in, or give `charts` a `selector`), and
-    document the behavior in `docs/config.md` either way. Changing the
-    `artifacts` default alters which tags existing configs mirror.
-  - Decided for `charts`: add `charts[].selector` with `artifacts` semantics (see
-    C0). Still open: whether the `artifacts` default should change.
+- **T5.** `artifacts` selects tags with no semver filter by default, so
+  prereleases are kept: with no `semver` and no `regex` every tag that parses as
+  semver is eligible, and sorted by semver `1.2.0-rc.1` ranks above `1.1.0`, so
+  the default `limit: 1` picks the release candidate. Adding `semver: "*"` or a
+  `regex` excludes it. `charts` now uses the same selector and therefore behaves
+  the same way (see the charts section in `docs/config.md`).
+  - Still open: whether the shared default should change (for example exclude
+    prereleases unless asked), which would alter which tags and versions
+    existing configs mirror, for `artifacts` and `charts` alike.
 - **T6.** `artifacts` does not accept an `oci://` prefix consistently, unlike
   `charts` (where the OCI destination takes `oci://` or no scheme, and the
   Artifactory source/destination default to `https://`):

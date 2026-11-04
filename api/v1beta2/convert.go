@@ -39,12 +39,18 @@ func FromV1Beta1(in *apiv1beta1.Config) (*Config, error) {
 		out.Hosts = append(out.Hosts, converted)
 	}
 	for _, c := range in.Charts {
+		// v1beta1 charts had a flat version constraint (default "*") and limit.
+		// Keep that behavior: an unset version becomes an explicit "*", which
+		// excludes prereleases, unlike a v1beta2 selector without semver.
+		semver := c.Version
+		if strings.TrimSpace(semver) == "" {
+			semver = legacyChartVersion
+		}
 		out.Charts = append(out.Charts, ChartEntry{
 			Source:      c.Source,
 			Destination: c.Destination,
 			Name:        c.Name,
-			Version:     c.Version,
-			Limit:       c.Limit,
+			Selector:    Selector{Semver: semver, Limit: c.Limit},
 			Overwrite:   c.Overwrite,
 		})
 	}

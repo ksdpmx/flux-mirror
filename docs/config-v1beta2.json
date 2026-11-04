@@ -157,11 +157,6 @@
             ],
             "type": "string"
           },
-          "limit": {
-            "description": "Limit caps how many matching versions are mirrored. 0 means unlimited.",
-            "minimum": 0,
-            "type": "integer"
-          },
           "name": {
             "description": "Name is the chart name.",
             "type": "string"
@@ -170,18 +165,58 @@
             "description": "Overwrite re-mirrors versions that already exist at the destination.",
             "type": "boolean"
           },
+          "selector": {
+            "additionalProperties": false,
+            "description": "Selector selects which chart versions to mirror. It is the same selector\nas ArtifactEntry.Selector: regex → semver → sort → top-N, applied to the\nversion strings listed in the repository index (for example\n\"1.2.3+build.5\", not the OCI tag form \"1.2.3_build.5\"). Without semver no\nsemver filter applies, so prereleases are included.",
+            "properties": {
+              "limit": {
+                "description": "Limit caps how many tags are mirrored. 0 means unlimited.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "regex": {
+                "additionalProperties": false,
+                "description": "Regex applies a Go regexp prefilter to tags.",
+                "properties": {
+                  "extract": {
+                    "description": "Extract is the named capture group used as the sort/semver value.",
+                    "type": "string"
+                  },
+                  "pattern": {
+                    "description": "Pattern is the Go regexp applied to tags.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "pattern"
+                ],
+                "type": "object"
+              },
+              "semver": {
+                "description": "Semver is a semver constraint applied after the regex prefilter.",
+                "type": "string"
+              },
+              "sortBy": {
+                "description": "SortBy selects the sort strategy: semver, alphabetical, or numerical.",
+                "enum": [
+                  "semver",
+                  "alphabetical",
+                  "numerical"
+                ],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
           "source": {
             "description": "Source is the HTTP/S repository URL the chart is mirrored from.",
-            "type": "string"
-          },
-          "version": {
-            "description": "Version is the semver constraint selecting which chart versions to mirror.",
             "type": "string"
           }
         },
         "required": [
           "destination",
           "name",
+          "selector",
           "source"
         ],
         "type": "object"

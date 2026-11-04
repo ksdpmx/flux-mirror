@@ -9,5 +9,6 @@ charts:
     source: https://aws.github.io/eks-charts
     destination: example.jfrog.io/artifactory/helm-local/aws-vpc-cni
     destinationType: artifactory
-    version: ">=1.20.0"
-    limit: 3
+    selector:
+      semver: ">=1.20.0"
+      limit: 3

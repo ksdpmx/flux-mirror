@@ -57,8 +57,9 @@ charts:
   - source: https://charts.dexidp.io
     destination: oci://ghcr.io/example/charts
     name: dex
-    version: ">=0.19.0 <1.0.0"
-    limit: 5
+    selector:
+      semver: ">=0.19.0 <1.0.0"
+      limit: 5
     overwrite: true
 artifacts:
   - source: ghcr.io/dexidp/dex

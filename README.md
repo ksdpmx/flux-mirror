@@ -30,9 +30,9 @@ on upstream chart repositories.
 - **OCI 1.1 referrers** — opt-in mirror of signatures, SBOMs, and attestations attached to artifacts.
 - **Cosign verification** — opt-in keyless signature verification for selected
   source artifacts before they are mirrored, with optional minimum signature age.
-- **Selector pipeline** — for OCI artifacts, a four-step
-  `regex → semver → sort → top-N` filter. For charts, a semver constraint
-  plus top-N. Sort by `semver`, `alphabetical`, or `numerical`.
+- **Selector pipeline** — the same four-step `regex → semver → sort → top-N`
+  filter for OCI artifacts and Helm charts. Sort by `semver`, `alphabetical`, or
+  `numerical`.
 - **Idempotent** — destination digests are compared per tag/version. Re-runs
   copy only what's missing or drifted.
 - **Drift gating** — destination drift (different content under the same tag) is reported
@@ -80,8 +80,9 @@ charts:
   - name: external-dns
     source: https://kubernetes-sigs.github.io/external-dns/
     destination: oci://ghcr.io/my-org/charts
-    version: "*"
-    limit: 3
+    selector:
+      semver: "*"
+      limit: 3
 artifacts:
   - source: registry.k8s.io/external-dns/external-dns
     destination: ghcr.io/my-org/external-dns

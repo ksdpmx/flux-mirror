@@ -122,12 +122,8 @@ func (m *mirror) Plan(ctx context.Context) (sync.Plan, error) {
 		return plan, err
 	}
 
-	// Versions feed the selector as opaque strings — same shape as artifact tags.
-	sel := apiv1.Selector{
-		Semver: m.entry.EffectiveVersion(),
-		Limit:  new(m.entry.EffectiveLimit()),
-	}
-	res, err := selector.Select(versions, sel, selector.Options{Verbose: m.opts.Verbose})
+	// The selector is the same one artifacts use: regex → semver → sort → top-N.
+	res, err := selector.Select(versions, m.entry.Selector, selector.Options{Verbose: m.opts.Verbose})
 	if err != nil {
 		return plan, fmt.Errorf("select versions: %w", err)
 	}

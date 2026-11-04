@@ -27,7 +27,7 @@ func artifactoryEntry(srcURL, dstURL string) apiv1.ChartEntry {
 		Destination:     dstURL + artifactoryDir,
 		DestinationType: apiv1.DestinationTypeArtifactory,
 		Name:            "podinfo",
-		Limit:           new(0),
+		Selector:        apiv1.Selector{Limit: new(0)},
 	}
 }
 
@@ -238,7 +238,7 @@ func TestChartsMirror_ToArtifactoryDoesNotParseChartWhenUpToDate(t *testing.T) {
 	fake.Set(artifactoryDir+"/podinfo-2.0.0.tgz", bad)
 
 	entry := artifactoryEntry(srcURL, dstURL)
-	entry.Version = "2.0.0"
+	entry.Selector.Semver = "2.0.0"
 	m, err := New(c, entry, artifactoryOpts())
 	g.Expect(err).ToNot(HaveOccurred())
 	res, err := newRunner().Run(context.Background(), []sync.EntryMirror{m})
