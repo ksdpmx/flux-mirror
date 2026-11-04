@@ -159,6 +159,460 @@ fallback) and verifies that single signature. Known gaps:
   - Mirroring a chart through OCI and then using `artifacts` with cosign only
     helps when the OCI copy is signed by you.
 
+## Vulnerability scanning gate (to design)
+
+Implementation order (decided): (PR1) the `hooks.pre` skeleton for `artifacts`
+(step interface, runner `Gate` phase, per-step `timeout`, `concurrency` and
+`retries`, `blocked` status, report fields) together with a minimal `cosign`
+provider that only does referrer discovery, so config, validation and report are
+tested end to end with a real provider; engine tests use fake steps in Go test
+code only, no test-only provider reaches the public schema. (PR2) `cosign` gets
+tag discovery and `minAge`, taken over from the `fbeb674` patch, and that patch
+is reverted so `verify.go` goes back to upstream (S12). (PR3) the `wizcli`
+provider and its initContainer (S1 to S10, S17). Then the chart `hooks` values,
+`charts` support, retag (B7) and prune (B8).
+
+Goal: an ordered `hooks.pre` list on `artifacts[]` and `charts[]` whose steps
+can block a tag or version from being mirrored, like `verify` but pluggable. The
+first step type is a vulnerability and policy scan. Decisions so far:
+
+- Gate only (before copy, on the source digest). No post-copy hook.
+- Built-in provider, like `verify`, not a generic `exec` hook. First provider is
+  `wizcli`; a `wiz-api` provider (results from the Wiz registry connector) comes
+  later.
+- Applies to `artifacts` and `charts`. `--dry-run` does not run the scanner.
+- A hook step operates on a single tag (or chart version): its input is that
+  tag's source and destination tag and digest, its verdict applies to that tag
+  only. Operations on the whole tag list (regex, semver, sort, limit) belong to
+  the selector, and run-level work (end-of-run notification, report archiving,
+  metrics) is not a hook; it uses the `-o json` report outside flux-mirror.
+- A rejected tag gets a new `blocked` status with the semantic exit code `3`
+  (decided). Exit code priority: failures (`1`) over blocked (`3`) over drift
+  (`2`). A new `--blocked-exit-code N` flag (0 to 255, default `3`) works like
+  `--drift-exit-code`: when the semantic code is `3` it is replaced by `N` in
+  `classifyExit`, the report's `exitCode` stays the semantic value, and the
+  flag's value is validated in `validateSyncArgs`. `--drift-exit-code` keeps
+  applying only to drift, so each flag changes only its own code (setting
+  `--blocked-exit-code=0` keeps blocked-only runs green, for example while
+  rolling a scan out in report-only mode). Failures still win over both.
+- Credentials only through `WIZ_CLIENT_ID` / `WIZ_CLIENT_SECRET`, never in the
+  config. The `wizcli` binary must be in the image.
+
+Pipeline per entry (order matters):
+
+1. Select candidate source tags (regex, semver, sort, limit).
+2. Map the destination tag (B7) and reject collisions.
+3. Resolve the source digest (one HEAD). Upstream `verify`, when configured,
+   still runs here in `Plan` for every selected tag on every run, even for tags
+   that are already up to date (compare B4). Our hooks do not.
+4. Compare with the destination: equal digests mean the tag is skipped with no
+   verification or scan, since no new content enters; drift with
+   `overwrite: false` is reported; neither continues.
+5. `hooks.pre` for tags that will be copied.
+6. Mirror (copy).
+7. `hooks.post` after a successful copy.
+
+The comparison today runs in each job's `Run`, after `Plan`. Run `hooks.pre`
+after the comparison and before the copy, not in `Plan` like `verify`: this scans
+only tags that will be copied and runs under per-step limits instead of serially
+(compare B4). It must not run inside the copy `Run` either, because the per-job
+`--timeout` and `--retries` would apply to it; use a separate pre phase (see S5).
+
+Sketch of the config (names not final). `hooks.pre` is an ordered list: steps
+run in order and the first failing step stops the chain, so cheap checks go
+before expensive ones (the scanner last). `hooks.post` is reserved for later.
+
+```yaml
+hooks:
+  pre:
+    - name: signature          # cheap checks first
+      provider: cosign         # later, replaces `verify` (S12)
+      cosign:                  # provider parameters: one typed sub-object named after the provider
+        matchOIDCIdentity:
+          - issuer: https://token.actions.githubusercontent.com
+            subject: ^https://github\.com/example/.*$
+        minAge: 12h            # signature too new: skip the tag (see S12 for how it is derived)
+    - name: vuln-scan          # expensive, last
+      provider: wizcli
+      timeout: 10m             # common controls stay at step level
+      concurrency: 2
+      retries: 1               # extra attempts after a scan error, not after a policy failure
+      onFailure: block         # block (default) | warn
+      wizcli:
+        policies: [prod-vuln]  # optional: all CLI policies of the account when omitted
+        projects: []           # optional
+```
+
+Hook package decisions (`internal/hooks`):
+
+- Step config: common controls (`name`, `provider`, `timeout`, `concurrency`,
+  `retries`, `onFailure`) at step level, provider parameters in a typed
+  sub-object named after the provider; validation requires exactly the
+  sub-object that matches `provider`. Strict decoding and the generated JSON
+  Schema then catch misplaced fields.
+- `Step.Run(ctx, Input) (Outcome, error)`: an error is an infrastructure failure
+  and is retried per `retries`; a policy rejection is `Outcome{Verdict: Deny}`,
+  never an error, never retried. An error wrapped with `Permanent(err)`
+  (bad parameters, missing binary, authentication failure) is not retried.
+- The report keeps each provider's own typed result (the report schema grows
+  with the providers), not a free-form map.
+- The engine resolves the source digest before the first step; steps are built
+  once at startup (`Provider.Build`) so bad parameters fail before any network
+  work.
+
+Report decisions (`api/v1beta2/report_types.go`):
+
+- `TagResult.Steps []StepResult` (execution order, only steps that ran):
+  `name`, `provider`, `verdict` (`allow`, `deny`, `skip`, `error`), `reason`,
+  `error`, `attempts`, `duration`, plus the provider's own typed result
+  (`cosign` reuses the existing `Verification` shape; `wizcli` gets a new type
+  in PR3). The top-level `Verification` stays owned by upstream `verify:` and is
+  not filled by hook steps.
+- New status `blocked` (kubebuilder `Enum`, `validStatuses`, summary counts, the
+  report totals and `PrettyPrint` all learn it).
+- Row mapping: all steps allow, the copy outcome as today; a `deny` gives
+  `blocked` with `reason` = the step name (the specific reason is in `steps[]`);
+  a `skip` gives `skipped` with the step's reason (for example
+  `signature-too-new`); an error after the retries with `onFailure: block` gives
+  `failed` with `error` = `hook <name>: ...`; an error with `onFailure: warn`
+  continues and the step shows `verdict: error`; up-to-date and drifted tags
+  never run steps and have no `steps`.
+
+Validation decisions (`internal/config`): `provider` must be registered (PR1:
+`cosign`) and match the one filled sub-object (missing or extra sub-objects are
+errors); `name` unique within an entry and a valid lowercase identifier;
+`timeout` greater than 0, `concurrency` at least 1, `retries` at least 0,
+`onFailure` is `block` or `warn`; `hooks` on a `charts` entry is an error in the
+first version; an entry with both `verify:` and a `cosign` step is rejected at
+load time (it would verify twice); provider parameters are validated by the
+provider (for `cosign`: at least one `matchOIDCIdentity` with `issuer` and a
+valid `subject` regexp, reusing `validateVerification`).
+
+Runner decisions (`internal/sync`, `internal/artifacts`): `Job` gets an optional
+`Gate(ctx) (GateResult, error)` that runs before `Run`, outside the per-job
+budget (`--timeout`, `--retries`); `GateResult` carries an optional terminal
+`JobResult` (then `Run` is not called) and the `StepResult`s. Per job: a
+`PlanError` is recorded as before; otherwise `Gate` runs: a terminal result
+(up-to-date `skipped`, `drifted`, `blocked` by a `deny`, `skipped` by a step
+`skip`) is recorded with its steps; a step error with `onFailure: block` is a
+`failed` row (`hook <name>: ...`); otherwise `runJob` copies with the usual
+timeout and retries. In `artifacts`, the gate does the comparison first (equal or
+drifted with `overwrite: false` end there, no steps), runs the steps only when
+not dry-run and hooks are configured, and caches the comparison for the first
+copy attempt (a retry compares again, as today). Dry-run compares but does not run
+steps. An entry without hooks has `Gate == nil` and behaves exactly as before;
+`charts` keep `Gate == nil`. The comparison requests in the gate use `--timeout`
+as their upper bound; each step uses its own `timeout`. A job waiting for a step's
+concurrency slot keeps its outer `--concurrency` slot, so `--concurrency` should
+not be smaller than a step's `concurrency`. Entries run one after another, so a
+step's semaphore is created per entry step and is also its run-wide cap.
+
+The engine resolves the source digest itself before any step, so every step gets
+the same digest. Upstream `verify` stays a separate field with its own behavior
+(it runs earlier, in `Plan`, see S12); the `cosign` step is the later replacement
+that runs only for tags that will be copied.
+
+Facts from `wizcli --help` (local version): `wizcli scan container-image <image>`
+takes an image name (tag or digest) or a `.tar`/`.tgz`; `wizcli scan dir <path>`
+scans a directory; both accept `--policies`, `--projects`, `--timeout`,
+`--no-publish` and `--stdout json`.
+
+- **S1. Spike first.** Run `wizcli` by hand against a ghcr image and a saved tar
+  and record: the exit code per policy hit (`BLOCK`/`AUDIT`), the JSON shape, how
+  it authenticates to the source registry, how it treats multi-arch indexes, and
+  the scan time and disk use.
+  Results so far (wizcli 1.82.0, device-code login, 2026-11-05):
+  - Scanning an image by name needs a Docker daemon (`/var/run/docker.sock`);
+    it fails without one. A `.tar` from `crane pull` scans without a daemon, so
+    S2 (save to tar) is required, not just preferred. The scan of a 3.6 MB
+    alpine tar took about 10 s.
+  - `crane pull <index>` without `--platform` saves a single platform, not the
+    whole index. Scanning several platforms means one tar per platform.
+  - Without `--policies`, every policy of the account that applies to the CLI
+    lifecycle is evaluated (here vulnerabilities, end of life, secrets,
+    malware as BLOCK; sensitive data and license as AUDIT). So `policies` is
+    optional in our config.
+  - JSON (`--stdout json`, or `--json-output-file`) has `status.state`
+    (`SUCCESS`) and `status.verdict` (`FAILED_BY_POLICY` and `PASSED_BY_POLICY`
+    seen; `WARNED_BY_POLICY` or similar for an `AUDIT` hit is not seen yet), `id`,
+    `policies[]` with `enforcementMethod`, the findings
+    with `failedPolicyMatches`, and `result.analytics` counts (vulnerabilities,
+    secrets, malware, ...). With `--no-publish`, `reportUrl` is only a "did not
+    generate a report" message, so a report link needs publishing. The JSON
+    includes the user name of the scan: store only the verdict, scan id,
+    failed policy names and counts in the report, never the whole document.
+  - With stdout JSON the human status line (`FAILED Scan failed - policy
+    failure`) follows it; parse a `--json-output-file` instead.
+  - End-of-life gates age: `alpine:3.20` failed the "Block End of Life" policy
+    (`EOL-OPERATING-SYSTEM`, critical) because 3.20 reached its end of life.
+    A selector with a large or no `limit` will then block every old tag on
+    every run (see S5: only tags to be copied are scanned, so mirrored tags are
+    not re-scanned), which makes the blocked exit code noisy; this feeds S14 and
+    an exemption list (S11).
+  - A passing scan (`alpine:latest`) has `failedPolicyMatches: null`, no
+    `endOfLifeTechnologies`, and all `analytics` counts 0. Fields are `null` when
+    empty, not empty lists, so a parser must tolerate `null`.
+  - Still to check: the process exit code for a policy failure and for a pass, an
+    `AUDIT` hit, a scan error versus a policy failure, and a Helm chart with
+    `scan dir` (S3).
+- **S2. Scan input for images.** Preferred: save the image to a tar (crane) so
+  neither a docker daemon nor registry credentials for wizcli are needed, at the
+  cost of an extra pull. Multi-arch: scan one platform or all (undecided).
+  Optional cheaper input: `wizcli scan dir <dir> --scan-sbom` (also on
+  `scan container-image`) scans SBOM files in the target, so an SBOM found as an
+  OCI referrer of the source image could be scanned without pulling the image.
+  `--sbom-format` and `--sbom-output-file` only generate an SBOM. In practice an
+  SBOM is rarely a plain file: it is usually an OCI referrer, either a cosign
+  or BuildKit in-toto attestation (a DSSE envelope whose decoded statement has
+  the SBOM in `predicate`) or a plain SBOM artifact (`artifactType` CycloneDX or
+  SPDX, for example from `cosign attach sbom`). `wizcli` shows no stdin,
+  single-file or URL input (`scan dir` takes a path, `scan container-image` an
+  image name or tar), so the SBOM must be written to a temp directory first and
+  scanned with `scan dir --scan-sbom`, then removed. The referrer discovery of
+  `includeReferrers` and the attestation unpacking would be shared with V2. To
+  check: supported SBOM formats and versions, whether verdicts and policies
+  match an image scan, and the weaker guarantee (the SBOM may not match the
+  image, and upstream images without one still need the tar path).
+- **S3. `charts` input.** Extract the tgz to a temp dir and use `scan dir`. The
+  IaC types of `scan dir` list Kubernetes, Crossplane, Terraform, etc. but not
+  Helm, so it is not known whether templates are rendered. Verify in S1; if
+  unsupported, scanning charts adds little and `charts` may be dropped from the
+  first version.
+- **S4. OCI Helm charts under `artifacts`** are not images. Undecided: skip with
+  a log line, fail, or extract and use `scan dir` (depends on S3).
+- **S5. Execution.** Only scan tags that would be copied (not up-to-date
+  skips), once per digest per run, under its own concurrency limit and timeout.
+  A copy retry must not re-run the scan. Tags already mirrored are skipped before
+  any hook runs, so SBOM extraction and scanning only happen for tags that will be
+  copied; dedupe by digest within a run. Blocked tags are not copied, so they are
+  evaluated again on every run. Options: (A) accept it; (C) keep known-bad old
+  tags out of the selector (`semver`, `limit`); (B) a cross-run record of blocked
+  digests, which needs persistent storage a CronJob does not have and must expire
+  when policies or the vulnerability data change (a scan verdict is not a stable
+  property of a digest; an extracted SBOM is). Start with A and C. Keep the code in `internal/hooks`
+  (a generic step interface with the verdicts from S12; the `wizcli` provider
+  runs a subprocess).
+  - Per-step limits: each step has its own `timeout` and `concurrency`, which
+    apply to that step only (a semaphore per step; the runner handles one entry at
+    a time, so within a run this is also that step's global cap). Defaults:
+    conservative `concurrency` (for example 2), and a `timeout` a little larger
+    than the `--timeout` passed to `wizcli`, so flux-mirror ends a hung process.
+    The scan is synchronous; whether Wiz rate-limits (429) is unknown, so
+    separate a policy failure (blocked, no retry) from a scan error such as
+    network, timeout or throttling (failed, bounded retry with backoff).
+  - Per-step `retries`: configurable on each step and independent of the
+    runner's `--retries` (which only covers the copy). It counts extra attempts
+    after a scan error; a policy failure (`deny`) is never retried. Backoff grows
+    between attempts (like the runner's) and stays within the step's `timeout`,
+    which covers all attempts, not each one. Each attempt takes a concurrency
+    slot again, so a retrying tag does not hold it while it waits. The default is
+    a small number (0 or 1); exhausted retries end as `failed`, then `onFailure`
+    decides whether that blocks the tag or only warns.
+  - The runner's per-job budget does not fit hooks: `runJob` wraps the whole
+    `Run` in `--timeout` (default 5 minutes) and calls it again on failure
+    (`--retries`, default 3). Hooks inside `Run` would be cut off by that timeout
+    (a step with `timeout: 10m` included), spend it while waiting for a free
+    slot, and run again on every copy retry. So give `Job` a separate pre phase
+    that the runner executes before `runJob`, with its own context, outside
+    `PerJobTimeout`, using the step limits above; the copy keeps its own budget
+    and retries. This needs the comparison to run before the pre phase, so it
+    moves out of the copy `Run` (or the pre phase calls it), a larger change to
+    upstream code than a few lines in `Run`; keep it as small as possible.
+- **S6. Report.** A per-step result list on the tag row (step name, provider,
+  verdict, policy hit count, scan id or URL, duration), the new `blocked` status
+  and its exit code. The row records which step blocked. Regenerate the JSON
+  Schemas; update `docs/config.md`, `docs/report.md`, `docs/sync.md`.
+- **S7. `wiz-api` provider.** Registry-connector results arrive asynchronously.
+  Decide what a missing result means: wait with a timeout, fail, or allow.
+- **S8. Helm chart `sk8s-flux-mirror`.** Values for `hooks` in
+  `mirror.defaults.*` and per entry (lists are replaced as a whole by the
+  per-entry value, not merged by position; document it), ExternalSecret keys for
+  the Wiz service account, and the `wizcli` delivery decided in S17.
+- **S9. Tests.** A fake `wizcli` script on `PATH` for pass, block, timeout and
+  JSON output; no real Wiz in CI.
+- **S10. Open risks.** Whether `wizcli` can be redistributed in a public image;
+  ephemeral storage for tars; total run time for many tags.
+  `wizcli` is closed source: only binaries are published
+  (`https://downloads.wiz.io/v1/wizcli/<version>/wizcli-<os>-<arch>`, with a
+  sha256 per platform, 272 MB for 1.82.0 on macOS arm64), built from a private
+  repository (module `github.com/wiz-sec/wiz/cli-scanner`), and the `wiz-sec`
+  GitHub organization has no CLI source or Go API client. So it can only be run as
+  a subprocess. Delivery is decided in S17 (initContainer); pin the version and
+  tolerate unknown JSON fields.
+  Calling Wiz from the CLI means the analysis runs locally and the CLI talks to
+  the Wiz backend for login, policies and results; the public GraphQL API only
+  lets us read results or import external findings, so a `wiz-api` provider can
+  gate only digests that Wiz already scanned (for example through the registry
+  connector). Ask the Wiz contact whether a public API can trigger a scan.
+- **S11. Candidate use cases for hooks.** Not planned yet; they show why the
+  step interface must stay generic (input: ref, tag, digest; output: allow, deny
+  or skip plus reason). A generic `exec` provider is deferred until at least two
+  real non-Wiz needs exist, because it lets a config file run arbitrary commands.
+  - Pre, gates: approval or allowlist of upstream repositories (ticket, CMDB);
+    license or SBOM policy (no GPL, SBOM or SLSA attestation required); a
+    cooling-off period for new upstream tags (supply-chain poisoning); image
+    config checks (root user, EOL base image, size limit; dockle, conftest/OPA);
+    key-based signature verification (V7) via a `cosign` step; an exemption list
+    for tags a scan blocked.
+  - Pre, preparation (side effects, not gates, keep separate): create the
+    missing ECR repository and set tag immutability or lifecycle policy;
+    destination path pre-checks (T1).
+  - Post (cannot undo the copy): ask the Wiz registry connector to scan the new
+    digest or register it; sign the destination digest with our key and attach an
+    SBOM; tag or promote it (`latest`, JFrog properties); invalidate caches or
+    pull-through proxies; trigger a deployment or downstream pipeline; end-of-run
+    notification, report archiving (S3, SIEM), metrics push (Pushgateway), and
+    cleanup. The end-of-run ones only need the `-o json` report and can live in
+    the CronJob script. Per-tag post failures can only warn or mark the tag.
+  - Not hooks: maintenance windows and rate limiting belong to the CronJob
+    schedule.
+- **S12. `cosign` step in `hooks.pre`, replacing `verify` in our deployments
+  (later).** Upstream's `verify` stays untouched, so rebases do not conflict
+  with it. The fork adds a `cosign` provider that only reuses the existing
+  verifier code (`oci.NewVerifier`, read only) and lives in the new hooks
+  package. The `sk8s-flux-mirror` Helm chart never renders `verify:`; once the
+  `cosign` step exists, the chart maps its existing `verify` values to a
+  `hooks.pre` `cosign` step in its templates, so values stay compatible and no
+  Go-side migration or deprecation is needed. A second gain: upstream `verify`
+  runs before the comparison for every selected tag on every run, while a
+  `cosign` step runs only for tags that will be copied, so up-to-date tags cost
+  no verification. An equal digest means identical content, so skipping it loses
+  no integrity guarantee. What is no longer re-checked is trust state (a
+  signature revoked later, new vulnerabilities); that belongs to continuous
+  scanning on the destination side, not to the mirror. Pinning is unchanged: the
+  step verifies the digest resolved at the start of the pipeline and the copy uses
+  that same digest, never the tag. Design the step interface now:
+  - The engine resolves the digest itself when no earlier step did (the verify
+    code in `Plan` keeps resolving it as today); every step gets the same digest.
+  - A step verdict is `allow`, `deny` or `skip(reason)`. `minAge` stays a field of
+    the `cosign` step, not a separate step (kept together on purpose): it maps to
+    `skip` with `signature-too-new`, not to a failure.
+  - How `minAge` gets the signature time (upstream `internal/oci/verify.go`): the
+    verifier checks the cosign bundle with `WithSignedCertificateTimestamps(1)`,
+    `WithIntegratedTimestamps(1)` and `WithTransparencyLog(1)`, so the signature
+    must carry a Rekor entry. `result.VerifiedTimestamps` are filtered to type
+    `Tlog`, and the earliest `Timestamp` (the Rekor `integratedTime`, the moment
+    the signature was logged) is the signature time. The age is `now` minus that
+    time, floored at 0. Younger than `minAge` returns `SignatureTooNewError`
+    (carrying integrated time, age and `minAge`; mapped to `skip`); no Tlog
+    timestamp at all is a plain error, since the age cannot be enforced. The time
+    is a trustworthy log timestamp, unlike the image `created` field that the
+    builder writes. The `cosign` provider reuses this code and does not
+    re-implement it.
+  - A step may return structured data. It goes in the per-step report result; the
+    upstream `Verification` object (identity, issuer, integrated time) stays tied
+    to `verify:`. Later steps could read earlier results from a per-tag context if
+    a real need appears; none is planned now.
+  - Hook steps are judged per tag: unlike `verify`, a failure does not stop
+    planning of later tags.
+  - Reverting our own verify patch (`fbeb674`, cosign tag-based signature
+    discovery): the patch adds 280 lines in `internal/oci/cosign_tag_discovery.go`
+    (plus tests and a `go.mod` change) and refactors about 130 lines of upstream
+    `internal/oci/verify.go` (referrer discovery became `discoverSignatureBundle`,
+    which falls back to the legacy `sha256-<digest>.sig` tag). The `cosign` step
+    must keep tag discovery, otherwise images signed only through a tag (for
+    example `wiz-sensor`) cannot be verified, so reverting means moving the logic
+    into the hooks package, not dropping it. Result: `verify.go` returns to the
+    upstream version and the fork has no edits left in upstream files, which
+    removes the costliest rebase conflict. Cost: discovery, bundle parsing and
+    verification are chained in `verify.go` today, so the `cosign` provider may
+    need its own copy of part of the upstream verification code, which then must
+    be re-synced by hand when upstream changes it (security-relevant code).
+    Alternative to weigh: offer the tag discovery to upstream as a PR; if
+    accepted, neither a patch nor a copy has to be maintained.
+  - Setting both `verify` and a `cosign` step on one entry verifies twice;
+    reject it or warn.
+  - V1 and V2 then become extra `cosign` steps.
+
+- **S13. `hooks.post` design (not planned yet).** Same ordered-list shape and
+  step interface as `hooks.pre`, run after the copy. Open points:
+  - Level: per tag only, as for `hooks.pre`. End-of-run work (notification,
+    report archiving, metrics, cleanup) is not a post hook; it reads the
+    `-o json` report in the CronJob script.
+  - Failure: the copy cannot be undone, so a failing step can only warn or mark
+    the tag (a status such as `post-failed`, with its own exit-code rule). Decide
+    whether it affects the exit code at all.
+  - Input: destination digest and tag, source tag, copy result (copied,
+    overwritten); steps do not run for skipped, drifted or failed tags unless a
+    step opts in. `--dry-run` does not run them.
+  - Retries: a failed post step must not re-run the copy; it has its own
+    per-step `retries` and `timeout`, same as pre steps (see S5).
+  - Providers worth building first: `tag` (alias tags) and `cosign-sign`; others
+    are listed in S11 and may stay in the CronJob script.
+
+- **S14. `limit` versus blocking steps (decide before building).** The selector
+  (regex, semver, sort, limit) works on the whole tag list and stays upstream
+  code, ahead of the per-tag pipeline; per-tag filters (cooling-off period, tag
+  allowlist) are `skip` steps in `hooks.pre`, not part of the selector. Because
+  `limit` applies first, with `limit: 1` a blocked latest tag leaves the entry
+  with nothing mirrored instead of falling back to the next tag. Options: (A)
+  keep it: simple, and the run reports the block; (B) apply `limit` to the tags
+  that pass the steps: matches "mirror the latest acceptable version" but must
+  run the steps on more candidates than copied, and the pipeline order changes.
+  Decided: (A), documented. A blocked tag occupies a `limit` slot, so with
+  `limit: 1` a blocked latest tag leaves nothing mirrored for that entry.
+  Revisit (B) only if blocks turn out to be common.
+
+- **S15. `cosign-sign` post step: sign the destination digest with our own key
+  (later).** For upstream images that have no signature, or when consumers must
+  trust one organization key instead of each upstream identity. Per tag, after a
+  successful copy, on the destination digest. Open points:
+  - Key source: AWS KMS (`awskms://`, works with the IRSA setup already used for
+    ECR) as the first choice, then a key from a mounted Secret; the key is never
+    in the config file, only a reference. Keyless signing needs an OIDC identity
+    that a CronJob normally does not have.
+  - Where the signature goes: an OCI 1.1 referrer on the destination digest or
+    the legacy `sha256-<digest>.sig` tag, matching what the consumers' verifiers
+    read. Check how `includeReferrers` (upstream signatures copied as is)
+    coexists with ours.
+  - Idempotent: skip when a valid signature by this key already exists, and run
+    for `skipped` (up-to-date) tags too so a failed earlier signing is repaired.
+  - Annotations to record: source reference and digest, mirror time. Rekor
+    upload is optional (private registries may disable it).
+  - Not for `destinationType: artifactory` (a `.tgz` file, no OCI digest).
+  - Consumers verify with `cosign verify --key`; this pairs with V7, which is
+    key-based verification of the source. Check whether the cosign library used
+    by `verify` already provides signing, to avoid a new dependency.
+  - Failure only warns or marks the tag (copy cannot be undone), see S13.
+- **S16. Scope boundary: admission versus continuous scanning.** `hooks.pre`
+  gates content at mirror time only. Tags that are already mirrored (equal
+  digest, so skipped) are not verified or scanned again, and the mirror does not
+  re-check trust state later (signature revoked, new vulnerabilities, a policy
+  that became stricter such as end of life). That belongs to continuous scanning
+  of the destination registries, which is a separate process:
+  - ECR: Amazon Inspector enhanced scanning (continuous rescans).
+  - Wiz: the registry connector for ECR, with results in the same portal.
+  - Artifactory: Xray, if licensed (also covers Helm charts).
+  Use the same policy set for admission and for continuous scanning, otherwise
+  content passes the gate and is flagged right after. The action on a finding
+  (quarantine, delete, alert) is taken on the destination side or in Wiz, not by
+  flux-mirror; B8 (prune) only covers tags the source no longer has. The
+  `wiz-api` provider (S7) and a post step that asks the connector to scan a new
+  digest (S11) are links to this process, not replacements for it.
+- **S17. Delivering `wizcli` to the CronJob: initContainer (decided).** flux-mirror
+  runs `wizcli` as a subprocess in the main container, so the binary must be on
+  its filesystem. Chosen: an initContainer copies the binary from a dedicated
+  internal image into an `emptyDir` that the main container mounts (for example at
+  `/opt/wiz`), and flux-mirror takes the binary path from its config (default
+  `wizcli` on `PATH`), so the code does not depend on the deployment.
+  - Why not the flux-mirror image: it would grow from a small alpine image by
+    about 272 MB, tie the `wizcli` version to flux-mirror releases, and
+    redistribute a Wiz binary if the image (`ghcr.io/ksdpmx/flux-mirror`) is public.
+  - Why not a sidecar: `exec` cannot cross containers and `wizcli` has no server
+    mode, so a sidecar would need a custom agent and a file protocol; an ordinary
+    sidecar also keeps a Job from finishing (native sidecars, Kubernetes 1.28 or
+    later, would be needed).
+  - The `wizcli` image: built by us from `alpine` plus the `downloads.wiz.io`
+    binary with a pinned version and its sha256, pushed to the private ECR. Check
+    whether Wiz publishes an official container image and use it if so.
+  - Chart work: an initContainer and an `emptyDir` for the binary; a second
+    `emptyDir` for tars and extracted charts with a configurable `sizeLimit`; a
+    writable `HOME` for `wizcli` (it writes `~/.wiz`, and the main container runs
+    as `65534`); resources for `wizcli`; the image tag and checksum as values.
+  - To verify: the Linux binary runs on alpine (static or not), which Wiz
+    domains it needs (at least `auth.app.wiz.io`) for NetworkPolicy or egress
+    proxy rules, and memory use on large images.
+
 ## Backlog
 
 - **B1.** `charts` Helm source should reuse `hosts` auth. Today
@@ -188,3 +642,55 @@ fallback) and verifies that single signature. Known gaps:
     `Chart.yaml` exists and name/version are non-empty).
   - `artifacts` image to OCI is already streamed by crane; no change.
   - Optionally bound in-memory bytes across jobs with a weighted semaphore.
+- **B7. Retag on sync.** Today the destination tag always equals the source tag.
+  This is a core feature, not a hook. Post: a post step could only add an alias
+  after copying under the source tag, which leaves the source tag behind (it
+  cannot be deleted on immutable repositories) and breaks the up-to-date and
+  drift checks, which compare the destination tag. Pre: a step that rewrites the
+  destination tag conflicts with the hook rules, because `--dry-run` must still
+  report the mapped tag, up-to-date tags must be mapped to be compared (S5 skips
+  hooks for them), and collisions are only visible at entry level. So compute
+  the mapped tag in `Plan` before the hooks run, and hand both tags to them.
+  Adding extra alias tags
+  (`stable`, `mirror-1.2.3`) is a different feature and fits a post `tag`
+  provider (see S11).
+  Allow a per-entry template that derives the destination tag from the source
+  tag (examples: add a prefix or suffix, strip a leading `v`, add a date).
+  Open points:
+  - Template syntax: reuse the selector's regex expand (`$version`, named groups
+    from `selector.regex`) for consistency, or a Go template with variables such
+    as `{{ .Tag }}` and `{{ .Version }}`. Decide which variables exist (tag,
+    regex groups, digest).
+  - Collisions: two selected source tags that map to one destination tag must be
+    rejected at plan time (an entry-level error), and the destination tag must be
+    a valid OCI tag.
+  - Selection, `limit` and sorting stay on the source tags; the up-to-date and
+    drift checks compare the mapped destination tag.
+  - Signatures and referrers are found by digest, and the cosign `.sig` tag name
+    derives from the digest, so they are unaffected; check the referrer copy
+    uses the same digest and not the tag.
+  - `destinationType: artifactory` requires the chart version to equal the tag,
+    so retagging is rejected there. `charts` to OCI could use it (the tag is the
+    version with `+` as `_`); `charts` to Artifactory cannot.
+  - Report: a tag row has one `tag` today; add the destination tag (for example
+    `destinationTag`) and regenerate the schema; hooks should receive both tags.
+  - Helm chart: `mirror.defaults.artifacts` and per-entry value, and a test for
+    the rendered config.
+- **B8. Source tag deleted: no prune today.** A tag removed from the source is
+  not in `ListTags`, so it produces no job, no report row and no deletion; the
+  destination copy stays. With `limit`, a removed latest tag makes the selector
+  pick the next one, so the destination ends up with both. Nothing signals that
+  the source lost a tag. Possible features, off by default:
+  - Report only: list destination tags that match the selector but are gone from
+    the source (for example `orphaned` rows), with no deletion.
+  - `prune: true` on an entry: delete such destination tags. Risks: immutable
+    repositories and missing delete permissions (ECR, GAR, Artifactory), removing
+    an image still in use, a source outage or listing error looking like "all
+    tags gone" (never prune on a failed or empty listing), and the selector
+    `limit` window shifting (prune only tags that match the selector's regex and
+    semver, never because they fall outside `limit`). Needs `--dry-run` preview,
+    its own status and exit-code rule, and a per-run cap.
+  - Not for `destinationType: artifactory` first (file deletion semantics).
+  - Interacts with S12: if upstream withdraws a tag for security reasons, a
+    prune would remove the copy, otherwise detection is left to scanning on the
+    destination side.
