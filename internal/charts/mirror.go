@@ -102,7 +102,11 @@ type versionJob struct {
 // chart lands in (destination base + chart name), or the Helm repository
 // directory for destinationType "artifactory".
 func (m *mirror) Plan(ctx context.Context) (sync.Plan, error) {
-	plan := sync.Plan{Source: m.planName(), Destination: m.entry.Destination}
+	plan := sync.Plan{
+		Source:                 m.planName(),
+		Destination:            m.entry.Destination,
+		IgnoreDriftForExitCode: m.entry.IgnoreDriftForExitCode,
+	}
 
 	src, err := helmrepo.New(m.entry.Source, m.opts.Insecure)
 	if err != nil {

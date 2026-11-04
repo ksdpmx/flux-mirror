@@ -209,7 +209,7 @@ Failures take precedence over drift. `--dry-run` does not bump the exit code for
 default. Use `--drift-exit-code=0` when the destination registry is known to be
 immutable and drift should be logged without failing CI.
 
-Drift on an artifact entry with
+Drift on an artifact or chart entry with
 [`ignoreDriftForExitCode: true`](config.md#overwrite-and-drift-behavior) is still logged and
 reported as `drifted`, but does not contribute to this exit code. A run where all
 drifted tags belong to such entries exits `0`, and `--drift-exit-code` is not

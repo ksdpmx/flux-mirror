@@ -239,6 +239,35 @@ func TestChartsMirror_DriftWithoutOverwrite(t *testing.T) {
 	g.Expect(res.ExitCode()).To(Equal(2))
 }
 
+func TestChartsMirror_DriftWithIgnoreDriftForExitCode(t *testing.T) {
+	g := NewWithT(t)
+	srcURL := newHTTPHelmRepo(t, "1.0.0")
+	dst := testregistry.Repo(dockerReg, "charts-ignore-drift")
+
+	c := oci.NewClient(oci.Insecure())
+	pushHelmFixture(t, c, dst+"/podinfo:1.0.0", "9.9.9")
+
+	entry := apiv1.ChartEntry{
+		Source:                 srcURL,
+		Destination:            "oci://" + dst,
+		Name:                   "podinfo",
+		Selector:               apiv1.Selector{Limit: new(1)},
+		IgnoreDriftForExitCode: true,
+	}
+	mirror, err := New(c, entry, Options{Logger: discardLogger(), Insecure: true})
+	g.Expect(err).ToNot(HaveOccurred())
+
+	res, err := newRunner().Run(context.Background(), []sync.EntryMirror{mirror})
+	g.Expect(err).ToNot(HaveOccurred())
+
+	// Drift is still reported, but it does not affect the exit code.
+	g.Expect(versionsWithStatus(res.Entries[0], apiv1.StatusDrifted)).To(Equal([]string{"1.0.0"}))
+	g.Expect(res.Entries[0].IgnoreDriftForExitCode).To(BeTrue())
+	g.Expect(res.TotalDrifted()).To(Equal(1))
+	g.Expect(res.HasDriftForExitCode()).To(BeFalse())
+	g.Expect(res.ExitCode()).To(Equal(0))
+}
+
 func TestChartsMirror_DriftWithOverwrite(t *testing.T) {
 	g := NewWithT(t)
 	srcURL := newHTTPHelmRepo(t, "1.0.0")
