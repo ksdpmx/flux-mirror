@@ -30,24 +30,49 @@ type Source interface {
 	Download(ctx context.Context, chartName, version string) ([]byte, error)
 }
 
-// New builds the HTTP/S Source for sourceURL (auth via Helm repositories.yaml
-// when present). Only http and https are supported: an OCI Helm chart is
-// mirrored OCI-to-OCI through the artifacts mirror, never here.
-func New(sourceURL string) (Source, error) {
-	u, err := url.Parse(sourceURL)
+// NormalizeSource parses the URL of an HTTP/S Helm chart repository. The scheme
+// is optional and defaults to https; only http and https are accepted (an OCI
+// Helm chart is mirrored OCI-to-OCI through the artifacts mirror, never here).
+// The path is left as given.
+func NormalizeSource(raw string) (*url.URL, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, errors.New("source is required")
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
+	u, err := url.Parse(raw)
 	if err != nil {
-		return nil, fmt.Errorf("parse source URL %q: %w", sourceURL, err)
+		return nil, fmt.Errorf("invalid URL: %w", err)
 	}
-	switch u.Scheme {
-	case "http", "https":
-		entry, err := httpRepositoryEntry(sourceURL)
-		if err != nil {
-			return nil, err
-		}
-		return NewHTTPSourceWithEntry(sourceURL, entry)
-	default:
-		return nil, fmt.Errorf("unsupported source scheme %q (want http or https)", u.Scheme)
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("scheme %q must be one of: http, https "+
+			"(use 'artifacts' to mirror an OCI Helm chart to another OCI repository)", u.Scheme)
 	}
+	if u.Host == "" {
+		return nil, fmt.Errorf("URL %q is missing a host", raw)
+	}
+	return u, nil
+}
+
+// New builds the HTTP/S Source for sourceURL (auth via Helm repositories.yaml
+// when present). The scheme is optional and defaults to https; a plaintext
+// http:// source is rejected unless insecure is set.
+func New(sourceURL string, insecure bool) (Source, error) {
+	u, err := NormalizeSource(sourceURL)
+	if err != nil {
+		return nil, err
+	}
+	if u.Scheme == "http" && !insecure {
+		return nil, fmt.Errorf("source %q uses plaintext http; pass --insecure to allow it", sourceURL)
+	}
+	normalized := u.String()
+	entry, err := httpRepositoryEntry(normalized)
+	if err != nil {
+		return nil, err
+	}
+	return NewHTTPSourceWithEntry(normalized, entry)
 }
 
 func httpRepositoryEntry(sourceURL string) (*repo.Entry, error) {

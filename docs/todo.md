@@ -1,13 +1,16 @@
 # Fork TODO: Helm repo publishing and verify
 
-Status: `artifacts` with `destinationType: artifactory` is implemented and
-checked against a real JFrog instance; see
-[Publishing to a Helm repository](config.md#publishing-to-a-helm-repository).
+Status: `destinationType: artifactory` is implemented for `artifacts` and for
+`charts` (OCI Helm chart or HTTP/S Helm repo source to a JFrog Artifactory Helm
+repository); see
+[Publishing to a Helm repository](config.md#publishing-to-a-helm-repository) and
+[Publishing charts to a Helm repository](config.md#publishing-charts-to-a-helm-repository).
+`artifacts` and `charts` were both checked against a real JFrog instance.
 This file tracks what is still open.
 
-## Open: charts to a Helm repo
+## Open: charts selector
 
-Decided order: C0 first (own commit), then C1-C3.
+Next, now that `charts` can publish to Artifactory: the `selector` refactor.
 
 - **C0.** Align `charts` version selection with `artifacts` by adding
   `charts[].selector`, the same `Selector` type and `validateSelector` as
@@ -28,37 +31,12 @@ Decided order: C0 first (own commit), then C1-C3.
     `internal/config`, `make generate`, docs, tests (regex with `extract`,
     prerelease with and without `selector`, alias conflicts).
   - Resolves the `charts` half of T5.
-- **C1.** Add `charts[].destinationType` (`oci | artifactory`, default `oci`)
-  with the same semantics as `artifacts`: the destination is the directory URL
-  (scheme optional, `http://` only with `--insecure`) and no chart name is
-  appended. This differs from `charts` to OCI, which appends `/<name>`.
-  Resolve destination credentials with
-  `registryauth.HostsForDirection(hosts, destination)`, as `artifacts` does.
-  `oci` keeps requiring an `oci://` destination; `artifactory` rejects `oci://`.
-- **C2.** Extract a `chartSink` in `internal/charts` (OCI and Artifactory
-  implementations) on top of `helmrepo.Pusher`; plan, drift, and outcome logic
-  stay unchanged.
-  - Share the Pusher construction (host matching, bearer vs Basic, reject cloud
-    provider hosts) with `internal/artifacts` instead of copying it.
-  - Create the sink in `Plan`, not in `charts.New`, so a bad destination or a
-    provider host fails that entry (also with `--dry-run`) instead of aborting the
-    whole sync at build time.
-  - Show the directory URL as `Plan.Destination` and the full `.tgz` URL as the
-    job `Dst`.
-  - Before uploading (only for `copied` / `overwritten`, not for `skipped` or
-    `drifted`), read `<chart>/Chart.yaml` from the tarball and fail that version
-    if `name` or `version` differs from the expected values. Read only that
-    entry from the tar stream rather than `loader.LoadArchive`. Note this differs
-    from `artifacts`, which takes name and version from the OCI config blob and
-    only compares `version` with the tag (it does not check `name`, nor compare
-    the blob with the tarball); consider adding a `name` check there.
-  - Verbose logs for `charts` stay as they are (see T3).
-- **C3.** Config validation, `docs/config.md` (charts section, auth), `docs/sync.md`,
-  an `examples/` file, and tests: validation tables, `charts` to a fake
-  Artifactory for copied / skipped / drifted / overwritten / dry-run / provider
-  host / name or version mismatch. Move the fake Artifactory server shared by the
-  `helmrepo` and `artifacts` tests into `internal/testregistry`.
-- Out of scope for this work: B1 (source auth via `hosts`), B2, B3, T5's
+- **C4.** `artifacts` with `destinationType: artifactory` takes the file name
+  from the OCI config blob and only compares `version` with the tag. It does not
+  check `name`, nor compare the blob with the tarball (the tarball is streamed).
+  `charts` now checks both against `Chart.yaml` before an upload; consider a
+  `name` check for `artifacts` too.
+- Out of scope for the above: B1 (source auth via `hosts`), B2, B3, T5's
   `artifacts` default, V8.
 
 ## Follow-ups from real-world testing
@@ -119,6 +97,23 @@ Decided order: C0 first (own commit), then C1-C3.
     `artifacts` default alters which tags existing configs mirror.
   - Decided for `charts`: add `charts[].selector` with `artifacts` semantics (see
     C0). Still open: whether the `artifacts` default should change.
+- **T6.** `artifacts` does not accept an `oci://` prefix consistently, unlike
+  `charts` (where the OCI destination takes `oci://` or no scheme, and the
+  Artifactory source/destination default to `https://`):
+  - `artifacts[].destination` (`destinationType: oci`) with `oci://` is
+    rejected by validation (`not a valid OCI repository`).
+  - `artifacts[].source` with `oci://` passes validation, then fails at run time
+    with a misleading `lookup oci: no such host`, because `oci` is parsed as the
+    registry host. This is a missing check, not intended support.
+  - Proposed: accept an optional `oci://` prefix on both (`destinationType: oci`
+    only; `artifactory` keeps its URL rules), normalize it once in
+    `artifacts.New` so `ListTags`, copy, referrers, `verify`, and the report
+    fields all see the unprefixed form, and document it in `docs/config.md`.
+    If not done, at least reject `oci://` on `source` with a clear message.
+  - Current rules for reference: `artifacts` source/destination (`oci`) are
+    written without a scheme; `charts` source defaults to `https://` (`http://`
+    needs `--insecure`); `charts` OCI destination takes `oci://` or none; both
+    Artifactory destinations default to `https://` (`http://` needs `--insecure`).
 
 ## Verify gaps (to design)
 
@@ -185,7 +180,7 @@ fallback) and verifies that single signature. Known gaps:
 
 - **B1.** `charts` Helm source should reuse `hosts` auth. Today
   `helmrepo.HTTPSource` only reads Helm `repositories.yaml`
-  (`HELM_REPOSITORIES_CONFIG`) and builds its own `http.Client`, so `hosts` is
+  (`HELM_REPOSITORY_CONFIG`) and builds its own `http.Client`, so `hosts` is
   ignored. Match by host, use the shared transport, fall back to
   `repositories.yaml` (keeping its TLS/CA settings).
 - **B2.** `index.yaml` is cached per `HTTPSource` only, so several `charts`

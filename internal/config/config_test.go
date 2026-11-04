@@ -618,6 +618,15 @@ func TestValidate_Table(t *testing.T) {
 			errMsg: "scheme \"ftp\"",
 		},
 		{
+			name: "valid chart source without scheme",
+			cfg: Config{
+				TypeMeta: metav1.TypeMeta{APIVersion: GroupVersion.String(), Kind: ConfigKind},
+				Charts: []ChartEntry{{
+					Source: "aws.github.io/eks-charts", Destination: "oci://ghcr.io/x", Name: "aws-vpc-cni",
+				}},
+			},
+		},
+		{
 			name: "chart oci source rejected",
 			cfg: Config{TypeMeta: metav1.TypeMeta{APIVersion: GroupVersion.String(), Kind: ConfigKind}, Charts: []ChartEntry{{
 				Source: "oci://ghcr.io/example/charts", Destination: "oci://ghcr.io/x", Name: "foo",
@@ -625,11 +634,47 @@ func TestValidate_Table(t *testing.T) {
 			errMsg: "use 'artifacts' to mirror an OCI Helm chart",
 		},
 		{
+			name: "valid chart oci destination without scheme",
+			cfg: Config{
+				TypeMeta: metav1.TypeMeta{APIVersion: GroupVersion.String(), Kind: ConfigKind},
+				Charts: []ChartEntry{{
+					Source: "https://charts.example.com", Destination: "ghcr.io/my-org/charts", Name: "foo",
+				}},
+			},
+		},
+		{
 			name: "chart destination not oci",
 			cfg: Config{TypeMeta: metav1.TypeMeta{APIVersion: GroupVersion.String(), Kind: ConfigKind}, Charts: []ChartEntry{{
 				Source: "https://charts.example.com", Destination: "https://ghcr.io/x", Name: "foo",
 			}}},
 			errMsg: "scheme must be oci",
+		},
+		{
+			name: "valid chart artifactory destination without scheme",
+			cfg: Config{
+				TypeMeta: metav1.TypeMeta{APIVersion: GroupVersion.String(), Kind: ConfigKind},
+				Charts: []ChartEntry{{
+					Source: "https://aws.github.io/eks-charts", Name: "aws-vpc-cni",
+					Destination:     "x.jfrog.io/artifactory/helm-local/team",
+					DestinationType: DestinationTypeArtifactory,
+				}},
+			},
+		},
+		{
+			name: "chart artifactory destination rejects oci scheme",
+			cfg: Config{TypeMeta: metav1.TypeMeta{APIVersion: GroupVersion.String(), Kind: ConfigKind}, Charts: []ChartEntry{{
+				Source: "https://charts.example.com", Name: "foo",
+				Destination: "oci://x.jfrog.io/helm-local", DestinationType: DestinationTypeArtifactory,
+			}}},
+			errMsg: "scheme must be https",
+		},
+		{
+			name: "chart unknown destinationType",
+			cfg: Config{TypeMeta: metav1.TypeMeta{APIVersion: GroupVersion.String(), Kind: ConfigKind}, Charts: []ChartEntry{{
+				Source: "https://charts.example.com", Name: "foo",
+				Destination: "oci://ghcr.io/x", DestinationType: "nexus",
+			}}},
+			errMsg: "destinationType \"nexus\" must be",
 		},
 		{
 			name: "chart bad version constraint",

@@ -1,0 +1,13 @@
+apiVersion: mirror.plugin.fluxcd.io/v1beta2
+kind: Config
+hosts:
+  - host: example.jfrog.io
+    credential:
+      value: ${JFROG_TOKEN}
+charts:
+  - name: aws-vpc-cni
+    source: https://aws.github.io/eks-charts
+    destination: example.jfrog.io/artifactory/helm-local/aws-vpc-cni
+    destinationType: artifactory
+    version: ">=1.20.0"
+    limit: 3

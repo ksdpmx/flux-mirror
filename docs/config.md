@@ -274,22 +274,30 @@ artifacts:
 ### Charts
 
 `.charts` is an optional field that lists Helm charts to mirror from an HTTP/S
-Helm repository to an OCI destination. For each selected version, the chart
-`.tgz` is downloaded from the source and re-published to the destination as a
-Helm OCI artifact (a config blob with the chart metadata and a layer with the
-tarball bytes). Charts use the same outcomes and overwrite/dry-run semantics as
-artifacts; drift is detected by comparing the source tarball's content digest
-against the destination chart-layer digest, so re-runs against an unchanged
-source are idempotent.
+Helm repository to an OCI registry (the default) or to a JFrog Artifactory Helm
+repository. For each selected version, the chart `.tgz` is downloaded from the
+source and either re-published to the destination as a Helm OCI artifact (a
+config blob with the chart metadata and a layer with the tarball bytes) or, with
+[`destinationType: artifactory`](#publishing-charts-to-a-helm-repository),
+uploaded as a `.tgz` file. Charts use the same outcomes and overwrite/dry-run
+semantics as artifacts; drift is detected by comparing the source tarball's
+content digest against the destination chart-layer digest (OCI) or the stored
+file's SHA-256 (Artifactory), so re-runs against an unchanged source are
+idempotent.
 
 Each entry offers the following subfields:
 
 - `.name`, the chart name within the source repository. Required.
-- `.source`, the HTTP/S Helm repository URL the chart is pulled from. Required;
-  the scheme must be `http` or `https`, and the repository must serve a classic
-  `index.yaml` plus chart tarballs.
-- `.destination`, the OCI base URL the chart is published to. Required; the
-  scheme must be `oci`.
+- `.source`, the HTTP/S Helm repository URL the chart is pulled from. Required.
+  The scheme is optional and defaults to `https`; `http://` is accepted only with
+  `--insecure`. The repository must serve a classic `index.yaml` plus chart
+  tarballs. An `oci://` source is rejected: use [`.artifacts`](#artifacts).
+- `.destination`, where the chart is published. Required. With the default
+  `destinationType: oci` it is an OCI repository and the `oci://` prefix is
+  optional (`ghcr.io/my-org/charts` and `oci://ghcr.io/my-org/charts` are the
+  same); with `artifactory` it is a Helm repository directory URL.
+- `.destinationType`, an optional kind of destination: `oci` (the default) or
+  `artifactory`.
 - `.version`, an optional [semver range](https://github.com/Masterminds/semver#checking-version-constraints)
   (e.g. `>=2.7.0 <3.0.0`). Versions outside the range are dropped. It defaults to
   `*` (all versions).
@@ -320,6 +328,42 @@ charts:
     limit: 5
 ```
 
+#### Publishing charts to a Helm repository
+
+With `destinationType: artifactory`, each selected chart version is uploaded as
+`<name>-<version>.tgz` to a JFrog Artifactory Helm repository, which regenerates
+its `index.yaml`. The destination rules are the same as for
+[artifacts](#publishing-to-a-helm-repository): `.destination` is the repository
+directory URL, the scheme is optional and defaults to `https`, and `http://` is
+accepted only with `--insecure`. Authentication reuses [`hosts`](#hosts) for the
+destination host (a credential without `username` is a bearer token, one with
+`username` is Basic auth; cloud `provider` hosts are not supported and fail the
+entry).
+
+Unlike `oci`, the chart name is **not** appended to `.destination`: the file is
+stored directly in the given directory, so add any chart directory yourself.
+
+```yaml
+hosts:
+  - host: example.jfrog.io
+    credential:
+      value: ${JFROG_TOKEN}
+charts:
+  - name: aws-vpc-cni
+    source: https://aws.github.io/eks-charts
+    destination: example.jfrog.io/artifactory/helm-local/aws-vpc-cni
+    destinationType: artifactory
+    version: ">=1.20.0"
+    limit: 3
+```
+
+Before a version is uploaded, the `Chart.yaml` inside the tarball must declare
+the same `name` and `version` as the entry and the selected version; otherwise
+only that version fails. Versions whose stored file is already identical, or that
+drift without `overwrite`, are not inspected. A `403` from Artifactory usually
+means the credential lacks deploy permission or the repository forbids
+overwriting existing files.
+
 ### Hosts
 
 `.hosts` is an optional field that configures per-host authentication for OCI
@@ -328,9 +372,10 @@ listed here takes priority over the ambient Docker config; requests to hosts tha
 are not listed fall back to the Docker config and its credential helpers
 (`~/.docker/config.json`, or `$DOCKER_CONFIG` when set).
 
-> **Note:** the `hosts` section does not apply to HTTP/S Helm repositories
-> (`.charts[].source`), which authenticate through the ambient Helm repositories
-> config.
+> **Note:** the `hosts` section does not apply to HTTP/S Helm repository
+> *sources* (`.charts[].source`), which authenticate through the ambient Helm
+> repositories config. It does apply to Artifactory Helm repository
+> *destinations* (`destinationType: artifactory`).
 
 Each entry has one required field, `.host`, the registry host (with optional
 port) the entry applies to (e.g. `registry.example.com` or `localhost:5000`).
@@ -732,6 +777,7 @@ first mirrored. Referrers that exist with a different digest are skipped
 | `artifacts[].ignoreDriftForExitCode` | `false`    |
 | `artifacts[].destinationType`        | `oci`      |
 | `artifacts[].verify`                 | unset      |
+| `charts[].destinationType`           | `oci`      |
 | `charts[].version`                   | `*`        |
 | `charts[].limit`                     | `1`        |
 | `charts[].overwrite`                 | `false`    |

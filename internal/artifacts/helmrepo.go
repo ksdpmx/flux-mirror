@@ -11,7 +11,6 @@ import (
 
 	apiv1 "github.com/fluxcd/flux-mirror/api/v1beta2"
 	"github.com/fluxcd/flux-mirror/internal/helmrepo"
-	"github.com/fluxcd/flux-mirror/internal/registryauth"
 	"github.com/fluxcd/flux-mirror/internal/sync"
 )
 
@@ -41,30 +40,7 @@ func (m *mirror) prepareHelmRepo(ctx context.Context, tags []string) error {
 }
 
 func (m *mirror) newPusher() (*helmrepo.Pusher, error) {
-	u, err := helmrepo.NormalizeDestination(m.entry.Destination)
-	if err != nil {
-		return nil, fmt.Errorf("destination: %w", err)
-	}
-	opts := []helmrepo.PusherOption{helmrepo.WithTransport(m.opts.Transport)}
-	for _, h := range m.opts.Hosts {
-		if !strings.EqualFold(h.Host, u.Host) {
-			continue
-		}
-		if h.IsCloudProvider() {
-			return nil, fmt.Errorf("host %q uses cloud provider %q, which is not supported for destinationType %q",
-				h.Host, h.Provider, apiv1.DestinationTypeArtifactory)
-		}
-		// A credential without a username is a bearer token stamped by the
-		// shared transport; only username credentials need Basic auth here.
-		if h.Credential != nil && h.Credential.Username != "" {
-			opts = append(opts, helmrepo.WithBasicAuth(func(ctx context.Context) (string, string, error) {
-				a, err := registryauth.ResolveHostAuth(ctx, h)
-				return a.Username, a.Password, err
-			}))
-		}
-		break
-	}
-	return helmrepo.NewPusher(m.entry.Destination, m.opts.Insecure, opts...)
+	return helmrepo.NewPusherForHosts(m.entry.Destination, m.opts.Insecure, m.opts.Transport, m.opts.Hosts)
 }
 
 // runChartTag mirrors one OCI Helm chart tag to the Helm repository. A failure
