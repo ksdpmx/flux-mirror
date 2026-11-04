@@ -309,6 +309,7 @@ Each entry offers the following subfields:
   first**. Set `semver: "*"` (or a range) to keep only releases, or a constraint
   with a prerelease suffix such as `">=1.0.0-0"` to include them explicitly.
 - `.overwrite`, see [Overwrite and drift behavior](#overwrite-and-drift-behavior).
+- `.ignoreDriftForExitCode`, see [Overwrite and drift behavior](#overwrite-and-drift-behavior).
 
 Helm repository authentication is **not** configured under `hosts`. It is loaded
 automatically from the ambient Helm repositories config — Helm's default
@@ -760,11 +761,12 @@ cannot be resolved automatically: it surfaces in the run output and the
 into. The [`--overwrite`](sync.md#flags) CLI flag forces `overwrite:
 true` for every entry, overriding per-entry values, for one-off resyncs.
 
-`.artifacts[].ignoreDriftForExitCode` is an optional boolean, `false` by default. When
-`true`, drifted tags for that entry are still logged and reported as `drifted`,
+`.artifacts[].ignoreDriftForExitCode` and `.charts[].ignoreDriftForExitCode` are
+optional booleans, `false` by default. When `true`, drifted tags (versions for
+charts) for that entry are still logged and reported as `drifted`,
 but they do not contribute to the drift exit code. If every drifted tag belongs
 to an entry with `ignoreDriftForExitCode: true`, the run exits `0` and
-`--drift-exit-code` is not applied. Use it for an artifact whose destination is
+`--drift-exit-code` is not applied. Use it for an entry whose destination is
 expected to diverge, without muting drift for the rest of the config.
 
 With `includeReferrers: true`, the same rule applies to referrers. Referrers
@@ -788,6 +790,7 @@ first mirrored. Referrers that exist with a different digest are skipped
 | `charts[].selector.sortBy`           | `semver`   |
 | `charts[].selector.limit`            | `1`        |
 | `charts[].overwrite`                 | `false`    |
+| `charts[].ignoreDriftForExitCode`    | `false`    |
 | `hosts[].direction`                  | `both`     |
 | `hosts[].provider`                   | `generic`  |
 | `hosts[].ecr`                        | unset      |

@@ -448,6 +448,13 @@ type ChartEntry struct {
 	// Overwrite re-mirrors versions that already exist at the destination.
 	// +optional
 	Overwrite bool `json:"overwrite,omitempty"`
+
+	// IgnoreDriftForExitCode still reports and logs drifted versions, but
+	// excludes them from the drift exit code. When every drifted version
+	// belongs to an entry with this field set, the run does not exit with the
+	// --drift-exit-code value.
+	// +optional
+	IgnoreDriftForExitCode bool `json:"ignoreDriftForExitCode,omitempty"`
 }
 
 // EffectiveDestinationType returns the destination type with the documented

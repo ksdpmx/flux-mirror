@@ -28,6 +28,7 @@ charts:
     selector:
       semver: ">=0.19.0 <1.0.0"
       limit: 5
+    ignoreDriftForExitCode: true
 artifacts:
   - source: ghcr.io/dexidp/dex
     destination: ghcr.io/example/mirror/dex
@@ -59,6 +60,7 @@ artifacts:
 	g.Expect(cfg.Charts[0].Name).To(Equal("dex"))
 	g.Expect(cfg.Charts[0].Selector.Semver).To(Equal(">=0.19.0 <1.0.0"))
 	g.Expect(cfg.Charts[0].Selector.EffectiveLimit()).To(Equal(5))
+	g.Expect(cfg.Charts[0].IgnoreDriftForExitCode).To(BeTrue())
 
 	g.Expect(cfg.Artifacts).To(HaveLen(2))
 	g.Expect(cfg.Artifacts[0].IncludeReferrers).To(BeTrue())

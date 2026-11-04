@@ -13,6 +13,7 @@ charts:
     selector:
       semver: ">=1.15.0"
       limit: 1
+    ignoreDriftForExitCode: true
 artifacts:
   - source: registry.k8s.io/metrics-server/metrics-server
     destination: localhost:5050/metrics-server

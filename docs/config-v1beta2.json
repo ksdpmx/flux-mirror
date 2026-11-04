@@ -157,6 +157,10 @@
             ],
             "type": "string"
           },
+          "ignoreDriftForExitCode": {
+            "description": "IgnoreDriftForExitCode still reports and logs drifted versions, but\nexcludes them from the drift exit code. When every drifted version\nbelongs to an entry with this field set, the run does not exit with the\n--drift-exit-code value.",
+            "type": "boolean"
+          },
           "name": {
             "description": "Name is the chart name.",
             "type": "string"
