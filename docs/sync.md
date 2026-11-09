@@ -121,15 +121,28 @@ Global flags: `--timeout` sets the default operation timeout, and `--no-envsubst
 → localhost:5050/charts/podinfo:6.10.2
 ✓ ghcr.io/stefanprodan/charts/podinfo:6.11.0 (copied)
 → localhost:5050/charts/podinfo:6.11.0
+✓ docker.io/library/alpine:3.24.3 (copied)
+→ localhost:5050/alpine:3.24.3
+  ├─ pre hook signature: allow (810ms)
+  └─ pre hook vuln-scan: allow (41.2s)
 ✗ docker.io/library/alpine:3.20 (blocked by vuln-scan: LNLP Block End of Life)
+  ├─ pre hook signature: allow (790ms)
+  └─ pre hook vuln-scan: deny (38.5s)
 ✗ ghcr.io/stefanprodan/charts/podinfo2 — plan failed: NAME_UNKNOWN
-Summary: 1 copied, 1 skipped, 1 blocked, 1 failed in 4.2s.
+Summary: 2 copied, 1 skipped, 1 blocked, 1 failed in 4.2s.
 ```
 
-A tag blocked by a [pre-copy hook](config.md#pre-copy-hooks) prints the step that
-rejected it and, for `wizcli`, the policies that failed. It has no destination
-line because nothing was copied. The hook progress itself is only logged with
-`--verbose`.
+When a [pre-copy hook](config.md#pre-copy-hooks) ran for a tag, one `pre hook`
+line per step is printed under its result line, in order: the verdict (`allow`,
+`deny`, `skip`, `error`) and how long the step took. A `skip` shows its reason.
+A step that failed with `onFailure: warn` does not stop the tag, so it is shown
+as `warn` with the first line of its error (cut at 120 characters), for example
+`pre hook vuln-scan: warn (5s): context deadline exceeded`; the report still
+records it as `verdict: error`. Tags that no hook ran for (up-to-date, drifted,
+or no hooks configured) have none. A blocked tag prints the step that rejected
+it and, for `wizcli`, the policies that failed; it has no destination line
+because nothing was copied. Per-platform progress and retries are only logged
+with `--verbose`.
 
 ### Verbose mode
 

@@ -51,22 +51,72 @@ func newProgress(out, ttyOut io.Writer, totalEntries int) *progress {
 func (p *progress) JobFinished(entry, id, dst string, res mirrorsync.JobResult, err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if err != nil {
-		p.emitLocked("✗ %s:%s — %v\n", entry, id, err)
+	// One write per job keeps the result line and its hook lines together.
+	var b strings.Builder
+	switch {
+	case err != nil:
+		fmt.Fprintf(&b, "✗ %s:%s — %v\n", entry, id, err)
 		if dst != "" {
-			p.emitLocked("→ %s\n", dst)
+			fmt.Fprintf(&b, "→ %s\n", dst)
 		}
-		return
-	}
-	if res.Status == apiv1.StatusBlocked {
+	case res.Status == apiv1.StatusBlocked:
 		// A blocked tag was not copied, so no destination line.
-		p.emitLocked("✗ %s:%s (blocked by %s)\n", entry, id, blockedDetail(res))
-		return
+		fmt.Fprintf(&b, "✗ %s:%s (blocked by %s)\n", entry, id, blockedDetail(res))
+	default:
+		fmt.Fprintf(&b, "✓ %s:%s (%s)\n", entry, id, res.Status)
+		if dst != "" {
+			fmt.Fprintf(&b, "→ %s\n", dst)
+		}
 	}
-	p.emitLocked("✓ %s:%s (%s)\n", entry, id, res.Status)
-	if dst != "" {
-		p.emitLocked("→ %s\n", dst)
+	writeHookLines(&b, res.Steps, err != nil)
+	p.emitLocked("%s", b.String())
+}
+
+// writeHookLines lists the pre-copy hook steps that ran for a tag as a tree
+// under its result line, in order: the verdict, how long the step took, and a
+// reason for a skip or a warning. A tag that no hook ran for (up-to-date,
+// drifted, no hooks configured) has none. Only the pre phase exists today;
+// label the phase here once a post phase is added.
+//
+// A step that ended in error while the tag did not fail was continued because
+// its onFailure is warn, so it is shown as "warn" with the error. When the tag
+// failed, the error is already on the result line.
+func writeHookLines(b *strings.Builder, steps []apiv1.StepResult, jobFailed bool) {
+	for i, step := range steps {
+		branch := "├─"
+		if i == len(steps)-1 {
+			branch = "└─"
+		}
+		verdict, reason := string(step.Verdict), ""
+		switch {
+		case step.Verdict == apiv1.StepVerdictSkip:
+			reason = step.Reason
+		case step.Verdict == apiv1.StepVerdictError && !jobFailed:
+			verdict, reason = "warn", firstLine(step.Error, maxHookReason)
+		}
+		detail := verdict
+		if d, err := time.ParseDuration(step.Duration); err == nil {
+			detail += " (" + d.Round(10*time.Millisecond).String() + ")"
+		}
+		if reason != "" {
+			detail += ": " + reason
+		}
+		fmt.Fprintf(b, "  %s pre hook %s: %s\n", branch, step.Name, detail)
 	}
+}
+
+// maxHookReason bounds the error text shown for a warned hook, so a long
+// provider message does not flood the output.
+const maxHookReason = 120
+
+// firstLine returns the first line of s, cut to max runes with an ellipsis.
+func firstLine(s string, max int) string {
+	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
+	line = strings.TrimSpace(line)
+	if runes := []rune(line); len(runes) > max {
+		return string(runes[:max]) + "…"
+	}
+	return line
 }
 
 // blockedDetail names the hook step that blocked a tag and why: the failed
