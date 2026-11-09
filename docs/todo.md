@@ -181,7 +181,10 @@ output. The `sk8s-flux-mirror` chart (S8) and the initContainer that delivers th
 `scan dir` renders chart templates (S3), `cosign` work units per platform
 (S5), `hooks.post` (S13), and a `wiz-api` provider (S7). Implemented as decided
 in S5: the step `concurrency` counts work units (`tag x platform` for `wizcli`),
-and `wizcli.platforms` is required.
+and `wizcli.platforms` is required. Later renamed: the `onFailure` control named
+in the sections below is now `onError` (an exhausted infrastructure error), and
+`onDeny` (`block` or `warn`) was added for a policy denial; the report marks a
+deny or error that did not stop the tag with `continued: true`.
 
 Goal: an ordered `hooks.pre` list on `artifacts[]` and `charts[]` whose steps
 can block a tag or version from being mirrored, like `verify` but pluggable. The

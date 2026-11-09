@@ -81,8 +81,16 @@
                       "description": "Name is a unique identifier for this step within the artifact entry.",
                       "type": "string"
                     },
-                    "onFailure": {
-                      "description": "OnFailure controls whether an exhausted step error blocks the tag or\nallows mirroring to continue. Defaults to \"block\".",
+                    "onDeny": {
+                      "description": "OnDeny controls what a policy denial does: \"block\" stops the tag, which\nis reported as blocked, and \"warn\" records the denial and lets the tag\ncontinue to the next step and the copy. Defaults to \"block\".",
+                      "enum": [
+                        "block",
+                        "warn"
+                      ],
+                      "type": "string"
+                    },
+                    "onError": {
+                      "description": "OnError controls what an exhausted infrastructure error does (a timeout,\na crashed tool, an unreachable registry): \"block\" fails the tag and\n\"warn\" records the error and lets the tag continue. A policy denial is\nnot an error; see OnDeny. Defaults to \"block\".",
                       "enum": [
                         "block",
                         "warn"

@@ -122,7 +122,7 @@ func TestProgressJobFinished(t *testing.T) {
 				Status: apiv1.StatusCopied,
 				Steps: []apiv1.StepResult{
 					{Name: "signature", Verdict: apiv1.StepVerdictAllow, Duration: "812ms"},
-					{Name: "vuln-scan", Verdict: apiv1.StepVerdictError, Duration: "5s", Error: "context deadline exceeded"},
+					{Name: "vuln-scan", Verdict: apiv1.StepVerdictError, Duration: "5s", Error: "context deadline exceeded", Continued: true},
 				},
 			},
 			want: "✓ alpine:3.20 (copied)\n" +
@@ -135,10 +135,11 @@ func TestProgressJobFinished(t *testing.T) {
 			res: syncpkg.JobResult{
 				Status: apiv1.StatusCopied,
 				Steps: []apiv1.StepResult{{
-					Name:     "vuln-scan",
-					Verdict:  apiv1.StepVerdictError,
-					Duration: "5s",
-					Error:    strings.Repeat("x", maxHookReason+10) + "\nsecond line",
+					Name:      "vuln-scan",
+					Verdict:   apiv1.StepVerdictError,
+					Duration:  "5s",
+					Continued: true,
+					Error:     strings.Repeat("x", maxHookReason+10) + "\nsecond line",
 				}},
 			},
 			want: "✓ alpine:3.20 (copied)\n" +

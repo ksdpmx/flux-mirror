@@ -306,16 +306,25 @@ Common step controls are optional:
   value, because a tag waiting for a slot still holds a global one.
 - `.retries` is the number of extra attempts after an infrastructure error, per
   work unit; it defaults to `0`. Policy denials are not retried.
-- `.onFailure` is `block` (default) or `warn`. A blocked infrastructure error
-  fails the tag; `warn` records the error and continues to the copy.
+- `.onDeny` is `block` (default) or `warn`, and applies to a policy denial. A
+  denial blocks the tag; with `warn` the denial is recorded and the tag goes on
+  to the next step and the copy.
+- `.onError` is `block` (default) or `warn`, and applies to an exhausted
+  infrastructure error (a timeout, a crashed tool, an unreachable registry). An
+  error fails the tag; with `warn` the error is recorded and the tag goes on.
+  The two are independent: `onError: warn` does not let a denial through, and
+  `onDeny: warn` does not hide an error. `onDeny: warn` with `onError: warn` is
+  an audit mode that reports and never stops a tag. `skip` is not affected by
+  either.
 
 A step with several units combines them: any denied unit denies the tag, else
-any errored unit is an error handled by `.onFailure`, else any skipped unit
+any errored unit is an error handled by `.onError`, else any skipped unit
 skips the tag, and only when every unit allows does the step allow.
 
-A policy denial returns a `blocked` tag with `reason` set to the step name.
-An `allow` verdict continues to the next step. A provider may also return
-`skip`, which records a skipped tag and its reason.
+A policy denial returns a `blocked` tag with `reason` set to the step name,
+unless the step sets `onDeny: warn`. An `allow` verdict continues to the next
+step. A provider may also return `skip`, which records a skipped tag and its
+reason.
 
 ```yaml
 artifacts:
@@ -954,7 +963,8 @@ first mirrored. Referrers that exist with a different digest are skipped
 | `artifacts[].hooks.pre[].timeout`    | `--timeout` |
 | `artifacts[].hooks.pre[].concurrency` | `1`       |
 | `artifacts[].hooks.pre[].retries`    | `0`        |
-| `artifacts[].hooks.pre[].onFailure`  | `block`    |
+| `artifacts[].hooks.pre[].onDeny`     | `block`    |
+| `artifacts[].hooks.pre[].onError`    | `block`    |
 | `artifacts[].hooks.pre[].wizcli.policies` | all CLI policies of the account |
 | `artifacts[].hooks.pre[].wizcli.binary` | `wizcli` |
 | `charts[].destinationType`           | `oci`      |

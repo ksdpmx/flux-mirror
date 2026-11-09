@@ -192,7 +192,37 @@ func TestWizcliStep_OneFailingPlatformBlocksTheTag(t *testing.T) {
 	g.Expect(step.Units[1].Wizcli.Verdict).To(Equal("FAILED_BY_POLICY"))
 }
 
-func TestWizcliStep_ScanErrorFollowsOnFailure(t *testing.T) {
+func TestWizcliStep_PolicyFailureFollowsOnDeny(t *testing.T) {
+	saver := func() *fakeSaver {
+		return &fakeSaver{content: map[string]string{"linux/arm64": "fail-policy"}}
+	}
+
+	t.Run("warn continues and keeps the failed policies", func(t *testing.T) {
+		g := NewWithT(t)
+		runner := wizcliRunner(t, newFakeWizcli(t), saver(), func(step *apiv1.HookStep) {
+			step.OnDeny = apiv1.HookActionWarn
+		})
+		result, err := runner.Run(context.Background(), Input{Source: "ghcr.io/example/image", Digest: "sha256:index"})
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(result.Terminal).To(BeNil())
+		g.Expect(result.Steps[0].Verdict).To(Equal(apiv1.StepVerdictDeny))
+		g.Expect(result.Steps[0].Continued).To(BeTrue())
+		g.Expect(result.Steps[0].Units[1].Wizcli.FailedPolicies).To(Equal([]string{"Block End of Life"}))
+	})
+
+	t.Run("onError warn does not let a policy failure through", func(t *testing.T) {
+		g := NewWithT(t)
+		runner := wizcliRunner(t, newFakeWizcli(t), saver(), func(step *apiv1.HookStep) {
+			step.OnError = apiv1.HookActionWarn
+		})
+		result, err := runner.Run(context.Background(), Input{Source: "ghcr.io/example/image", Digest: "sha256:index"})
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(result.Terminal).ToNot(BeNil())
+		g.Expect(result.Terminal.Status).To(Equal(apiv1.StatusBlocked))
+	})
+}
+
+func TestWizcliStep_ScanErrorFollowsOnError(t *testing.T) {
 	saver := func() *fakeSaver {
 		return &fakeSaver{content: map[string]string{"linux/arm64": "scan-error"}}
 	}
@@ -210,12 +240,13 @@ func TestWizcliStep_ScanErrorFollowsOnFailure(t *testing.T) {
 	t.Run("warn", func(t *testing.T) {
 		g := NewWithT(t)
 		runner := wizcliRunner(t, newFakeWizcli(t), saver(), func(step *apiv1.HookStep) {
-			step.OnFailure = apiv1.HookFailureWarn
+			step.OnError = apiv1.HookActionWarn
 		})
 		result, err := runner.Run(context.Background(), Input{Source: "ghcr.io/example/image", Digest: "sha256:index"})
 		g.Expect(err).ToNot(HaveOccurred())
 		g.Expect(result.Terminal).To(BeNil())
 		g.Expect(result.Steps[0].Verdict).To(Equal(apiv1.StepVerdictError))
+		g.Expect(result.Steps[0].Continued).To(BeTrue())
 	})
 }
 

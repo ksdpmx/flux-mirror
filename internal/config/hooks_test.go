@@ -92,15 +92,26 @@ func TestValidateArtifactHooks(t *testing.T) {
 			err: "retries must be at least 0",
 		},
 		{
-			name: "invalid onFailure",
+			name: "invalid onError",
 			step: apiv1.HookStep{
 				Name: "signature", Provider: apiv1.HookProviderCosign,
-				OnFailure: "ignore",
+				OnError: "ignore",
 				Cosign: &apiv1.CosignHookConfig{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
 					Issuer: "issuer", Subject: "subject",
 				}}},
 			},
-			err: "onFailure",
+			err: "onError",
+		},
+		{
+			name: "invalid onDeny",
+			step: apiv1.HookStep{
+				Name: "signature", Provider: apiv1.HookProviderCosign,
+				OnDeny: "ignore",
+				Cosign: &apiv1.CosignHookConfig{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
+					Issuer: "issuer", Subject: "subject",
+				}}},
+			},
+			err: "onDeny",
 		},
 		{
 			name: "invalid identity regex",
@@ -161,7 +172,8 @@ func TestValidateArtifactHooks(t *testing.T) {
 		step.Timeout = &metav1.Duration{Duration: time.Minute}
 		step.Concurrency = &positive
 		step.Retries = &zero
-		step.OnFailure = apiv1.HookFailureWarn
+		step.OnDeny = apiv1.HookActionWarn
+		step.OnError = apiv1.HookActionWarn
 		step.Cosign.MinAge = &metav1.Duration{Duration: time.Hour}
 		g.Expect(validateArtifactHooks(apiv1.ArtifactHooks{Pre: []apiv1.HookStep{step}})).To(Succeed())
 	})

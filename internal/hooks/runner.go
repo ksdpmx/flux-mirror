@@ -77,7 +77,8 @@ type stepRunner struct {
 	step      Step
 	timeout   time.Duration
 	retries   int
-	onFailure string
+	onDeny    string
+	onError   string
 	semaphore chan struct{}
 }
 
@@ -137,16 +138,21 @@ func NewRunner(config apiv1.ArtifactHooks, defaultTimeout time.Duration, builder
 		if cfg.Retries != nil {
 			retries = *cfg.Retries
 		}
-		onFailure := cfg.OnFailure
-		if onFailure == "" {
-			onFailure = apiv1.HookFailureBlock
+		onDeny := cfg.OnDeny
+		if onDeny == "" {
+			onDeny = apiv1.HookActionBlock
+		}
+		onError := cfg.OnError
+		if onError == "" {
+			onError = apiv1.HookActionBlock
 		}
 		r.steps = append(r.steps, stepRunner{
 			config:    cfg,
 			step:      step,
 			timeout:   timeout,
 			retries:   retries,
-			onFailure: onFailure,
+			onDeny:    onDeny,
+			onError:   onError,
 			semaphore: make(chan struct{}, concurrency),
 		})
 	}
@@ -154,8 +160,9 @@ func NewRunner(config apiv1.ArtifactHooks, defaultTimeout time.Duration, builder
 }
 
 // Run executes each step in order and stops on a deny or skip verdict.
-// Infrastructure errors are retried; onFailure decides whether an exhausted
-// error blocks the tag or allows later steps to run.
+// Infrastructure errors are retried; onError decides whether an exhausted
+// error blocks the tag or allows later steps to run, and onDeny does the same
+// for a policy denial.
 func (r *Runner) Run(ctx context.Context, input Input) (Result, error) {
 	log := r.logger.With("source", input.Source, "tag", input.Tag)
 	log.Info("hooks started", "steps", len(r.steps))
@@ -166,11 +173,13 @@ func (r *Runner) Run(ctx context.Context, input Input) (Result, error) {
 		if err != nil {
 			stepResult.Verdict = apiv1.StepVerdictError
 			stepResult.Error = err.Error()
-			result.Steps = append(result.Steps, stepResult)
-			if step.onFailure == apiv1.HookFailureBlock {
+			if step.onError == apiv1.HookActionBlock {
+				result.Steps = append(result.Steps, stepResult)
 				return result, fmt.Errorf("hook %s: %w", step.config.Name, err)
 			}
-			log.Warn("hook failed; continuing because onFailure is warn", "step", step.config.Name)
+			stepResult.Continued = true
+			result.Steps = append(result.Steps, stepResult)
+			log.Warn("hook failed; continuing because onError is warn", "step", step.config.Name)
 			continue
 		}
 
@@ -178,11 +187,18 @@ func (r *Runner) Run(ctx context.Context, input Input) (Result, error) {
 		stepResult.Reason = outcome.Reason
 		stepResult.Cosign = outcome.Cosign
 		result.Steps = append(result.Steps, stepResult)
+		last := &result.Steps[len(result.Steps)-1]
 
 		switch outcome.Verdict {
 		case apiv1.StepVerdictAllow:
 			continue
 		case apiv1.StepVerdictDeny:
+			if step.onDeny == apiv1.HookActionWarn {
+				last.Continued = true
+				log.Warn("hook denied tag; continuing because onDeny is warn",
+					"step", step.config.Name, "reason", outcome.Reason)
+				continue
+			}
 			log.Info("hook denied tag", "step", step.config.Name, "reason", outcome.Reason)
 			result.Terminal = &Terminal{
 				Status: apiv1.StatusBlocked,
@@ -200,12 +216,12 @@ func (r *Runner) Run(ctx context.Context, input Input) (Result, error) {
 			return result, nil
 		default:
 			err := fmt.Errorf("hook %s returned invalid verdict %q", step.config.Name, outcome.Verdict)
-			if step.onFailure == apiv1.HookFailureBlock {
+			if step.onError == apiv1.HookActionBlock {
 				return result, err
 			}
-			last := &result.Steps[len(result.Steps)-1]
 			last.Verdict = apiv1.StepVerdictError
 			last.Error = err.Error()
+			last.Continued = true
 		}
 	}
 	return result, nil

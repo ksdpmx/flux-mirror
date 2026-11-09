@@ -92,7 +92,7 @@ func TestRunner_RetriesErrorsAndWarns(t *testing.T) {
 	g := NewWithT(t)
 	config := hookConfigs(2)
 	config.Pre[0].Retries = new(1)
-	config.Pre[0].OnFailure = apiv1.HookFailureWarn
+	config.Pre[0].OnError = apiv1.HookActionWarn
 	var attempts atomic.Int32
 	first := stepFunc(func(context.Context, Input) (Outcome, error) {
 		attempts.Add(1)
@@ -111,7 +111,91 @@ func TestRunner_RetriesErrorsAndWarns(t *testing.T) {
 	g.Expect(result.Steps[0].Verdict).To(Equal(apiv1.StepVerdictError))
 	g.Expect(result.Steps[0].Error).To(ContainSubstring("temporary"))
 	g.Expect(result.Steps[0].Attempts).To(Equal(2))
+	g.Expect(result.Steps[0].Continued).To(BeTrue())
 	g.Expect(result.Steps[1].Verdict).To(Equal(apiv1.StepVerdictAllow))
+	g.Expect(result.Steps[1].Continued).To(BeFalse())
+}
+
+func TestRunner_DenyBlocksByDefault(t *testing.T) {
+	g := NewWithT(t)
+	var ran atomic.Int32
+	steps := []Step{
+		stepFunc(func(context.Context, Input) (Outcome, error) {
+			return Outcome{Verdict: apiv1.StepVerdictDeny, Reason: "policy"}, nil
+		}),
+		stepFunc(func(context.Context, Input) (Outcome, error) {
+			ran.Add(1)
+			return Outcome{Verdict: apiv1.StepVerdictAllow}, nil
+		}),
+	}
+	runner, err := NewRunner(hookConfigs(2), time.Second, buildSteps(steps...))
+	g.Expect(err).ToNot(HaveOccurred())
+
+	result, err := runner.Run(context.Background(), Input{Digest: "sha256:abc"})
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(result.Terminal).To(Equal(&Terminal{Status: apiv1.StatusBlocked, Reason: "step-0", Digest: "sha256:abc"}))
+	g.Expect(ran.Load()).To(BeZero())
+	g.Expect(result.Steps[0].Continued).To(BeFalse())
+}
+
+func TestRunner_DenyWithOnDenyWarnContinues(t *testing.T) {
+	g := NewWithT(t)
+	config := hookConfigs(2)
+	config.Pre[0].OnDeny = apiv1.HookActionWarn
+	var ran atomic.Int32
+	steps := []Step{
+		stepFunc(func(context.Context, Input) (Outcome, error) {
+			return Outcome{Verdict: apiv1.StepVerdictDeny, Reason: "policy"}, nil
+		}),
+		stepFunc(func(context.Context, Input) (Outcome, error) {
+			ran.Add(1)
+			return Outcome{Verdict: apiv1.StepVerdictAllow}, nil
+		}),
+	}
+	runner, err := NewRunner(config, time.Second, buildSteps(steps...))
+	g.Expect(err).ToNot(HaveOccurred())
+
+	result, err := runner.Run(context.Background(), Input{Digest: "sha256:abc"})
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(result.Terminal).To(BeNil())
+	g.Expect(ran.Load()).To(Equal(int32(1)))
+	g.Expect(result.Steps).To(HaveLen(2))
+	g.Expect(result.Steps[0].Verdict).To(Equal(apiv1.StepVerdictDeny))
+	g.Expect(result.Steps[0].Reason).To(Equal("policy"))
+	g.Expect(result.Steps[0].Continued).To(BeTrue())
+}
+
+func TestRunner_OnDenyWarnDoesNotCoverErrors(t *testing.T) {
+	g := NewWithT(t)
+	config := hookConfigs(1)
+	config.Pre[0].OnDeny = apiv1.HookActionWarn
+	runner, err := NewRunner(config, time.Second, buildSteps(stepFunc(
+		func(context.Context, Input) (Outcome, error) {
+			return Outcome{}, Permanent(errors.New("tool crashed"))
+		},
+	)))
+	g.Expect(err).ToNot(HaveOccurred())
+
+	result, err := runner.Run(context.Background(), Input{})
+	g.Expect(err).To(MatchError(ContainSubstring("tool crashed")))
+	g.Expect(result.Steps[0].Continued).To(BeFalse())
+}
+
+func TestRunner_OnErrorWarnDoesNotCoverDeny(t *testing.T) {
+	g := NewWithT(t)
+	config := hookConfigs(1)
+	config.Pre[0].OnError = apiv1.HookActionWarn
+	runner, err := NewRunner(config, time.Second, buildSteps(stepFunc(
+		func(context.Context, Input) (Outcome, error) {
+			return Outcome{Verdict: apiv1.StepVerdictDeny, Reason: "policy"}, nil
+		},
+	)))
+	g.Expect(err).ToNot(HaveOccurred())
+
+	result, err := runner.Run(context.Background(), Input{})
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(result.Terminal).ToNot(BeNil())
+	g.Expect(result.Terminal.Status).To(Equal(apiv1.StatusBlocked))
 }
 
 func TestRunner_BlocksOnExhaustedErrorByDefault(t *testing.T) {

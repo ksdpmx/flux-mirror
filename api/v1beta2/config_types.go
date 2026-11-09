@@ -30,10 +30,11 @@ const (
 	// HookProviderWizcli selects Wiz CLI vulnerability and policy scans in hooks.
 	HookProviderWizcli = "wizcli"
 
-	// HookFailureBlock blocks the tag when a hook step errors.
-	HookFailureBlock = "block"
-	// HookFailureWarn records a hook step error and continues.
-	HookFailureWarn = "warn"
+	// HookActionBlock stops the tag when a hook step denies it or errors.
+	HookActionBlock = "block"
+	// HookActionWarn records the deny or the error of a hook step and lets the
+	// tag continue to the next step and the copy.
+	HookActionWarn = "warn"
 
 	// JWTProviderGitHub mints a GitHub Actions OIDC ID token for the audience.
 	// It and JWTProviderForgejo currently mint tokens the same way (the
@@ -596,11 +597,20 @@ type HookStep struct {
 	// +optional
 	Retries *int `json:"retries,omitempty"`
 
-	// OnFailure controls whether an exhausted step error blocks the tag or
-	// allows mirroring to continue. Defaults to "block".
+	// OnDeny controls what a policy denial does: "block" stops the tag, which
+	// is reported as blocked, and "warn" records the denial and lets the tag
+	// continue to the next step and the copy. Defaults to "block".
 	// +kubebuilder:validation:Enum=block;warn
 	// +optional
-	OnFailure string `json:"onFailure,omitempty"`
+	OnDeny string `json:"onDeny,omitempty"`
+
+	// OnError controls what an exhausted infrastructure error does (a timeout,
+	// a crashed tool, an unreachable registry): "block" fails the tag and
+	// "warn" records the error and lets the tag continue. A policy denial is
+	// not an error; see OnDeny. Defaults to "block".
+	// +kubebuilder:validation:Enum=block;warn
+	// +optional
+	OnError string `json:"onError,omitempty"`
 
 	// Cosign configures keyless cosign verification for this step.
 	// +optional

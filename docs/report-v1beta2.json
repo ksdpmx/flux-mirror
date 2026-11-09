@@ -144,9 +144,13 @@
                             "minimum": 0,
                             "type": "integer"
                           },
+                          "continued": {
+                            "description": "Continued is true when the step denied the tag or errored, but its\nonDeny or onError is \"warn\", so the tag went on to the next step and the\ncopy. Verdict still holds the real result.",
+                            "type": "boolean"
+                          },
                           "cosign": {
                             "additionalProperties": false,
-                            "description": "Cosign carries the verified signature metadata when the provider is\ncosign and the signature passed.",
+                            "description": "Verification is the signature verification metadata recorded on a tag row.\nOnly Provider is guaranteed; everything else is best-effort and omitted when\nempty: Issuer/Identity are set when the keyless cert identity is recovered;\nIntegratedTime only when the bundle carries a verified transparency-log\ntimestamp; Age/MinAge only on the signature-too-new skip.",
                             "properties": {
                               "age": {
                                 "description": "Age is the signature age on the signature-too-new skip.",

@@ -151,11 +151,14 @@ verification. Only `provider` is guaranteed; the rest is best-effort.
 Each `steps[]` row records one pre-copy hook: `name`, `provider`, `verdict`
 (`allow`, `deny`, `skip`, or `error`), `attempts`, and `duration`. `reason` is
 present for a deny or skip; `error` is present when the step exhausted its
-infrastructure retries. A cosign step includes its confirmed signature
+infrastructure retries. `continued: true` marks a deny or an error that did not
+stop the tag because the step sets `onDeny: warn` or `onError: warn`; `verdict`
+still holds the real result. A cosign step includes its confirmed signature
 metadata in the typed `cosign` object. A denied tag has `status: "blocked"` and
 its tag-level `reason` is the step name; provider details remain in `steps[]`.
-Errors with `onFailure: block` produce a failed tag, while `onFailure: warn`
-records the error and lets mirroring continue. A too-new cosign signature is a
+Errors with `onError: block` produce a failed tag, while `onError: warn`
+records the error and lets mirroring continue; a denial with `onDeny: warn` is
+recorded the same way and the tag is copied. A too-new cosign signature is a
 `skip` verdict with reason `signature-too-new`; `cosign.age` and
 `cosign.minAge` record the measured and required ages.
 

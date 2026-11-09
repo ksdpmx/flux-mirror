@@ -68,7 +68,7 @@ func (p *progress) JobFinished(entry, id, dst string, res mirrorsync.JobResult, 
 			fmt.Fprintf(&b, "→ %s\n", dst)
 		}
 	}
-	writeHookLines(&b, res.Steps, err != nil)
+	writeHookLines(&b, res.Steps)
 	p.emitLocked("%s", b.String())
 }
 
@@ -78,10 +78,10 @@ func (p *progress) JobFinished(entry, id, dst string, res mirrorsync.JobResult, 
 // drifted, no hooks configured) has none. Only the pre phase exists today;
 // label the phase here once a post phase is added.
 //
-// A step that ended in error while the tag did not fail was continued because
-// its onFailure is warn, so it is shown as "warn" with the error. When the tag
-// failed, the error is already on the result line.
-func writeHookLines(b *strings.Builder, steps []apiv1.StepResult, jobFailed bool) {
+// A step that denied the tag or errored but let it continue (onDeny or onError
+// is warn) is shown as "warn" with the failed policies or the error. When the
+// step stopped the tag, the result line already says why.
+func writeHookLines(b *strings.Builder, steps []apiv1.StepResult) {
 	for i, step := range steps {
 		branch := "├─"
 		if i == len(steps)-1 {
@@ -91,8 +91,13 @@ func writeHookLines(b *strings.Builder, steps []apiv1.StepResult, jobFailed bool
 		switch {
 		case step.Verdict == apiv1.StepVerdictSkip:
 			reason = step.Reason
-		case step.Verdict == apiv1.StepVerdictError && !jobFailed:
-			verdict, reason = "warn", firstLine(step.Error, maxHookReason)
+		case step.Continued:
+			verdict = "warn"
+			if step.Verdict == apiv1.StepVerdictError {
+				reason = firstLine(step.Error, maxHookReason)
+			} else {
+				reason = firstLine(denyReason(step), maxHookReason)
+			}
 		}
 		detail := verdict
 		if d, err := time.ParseDuration(step.Duration); err == nil {
@@ -105,8 +110,8 @@ func writeHookLines(b *strings.Builder, steps []apiv1.StepResult, jobFailed bool
 	}
 }
 
-// maxHookReason bounds the error text shown for a warned hook, so a long
-// provider message does not flood the output.
+// maxHookReason bounds the text shown for a warned hook, so a long provider
+// message does not flood the output.
 const maxHookReason = 120
 
 // firstLine returns the first line of s, cut to max runes with an ellipsis.
@@ -119,20 +124,9 @@ func firstLine(s string, max int) string {
 	return line
 }
 
-// blockedDetail names the hook step that blocked a tag and why: the failed
-// Wiz policies when a wizcli unit reported them, otherwise the step's own
-// reason. Reason holds the step name for a blocked tag.
-func blockedDetail(res mirrorsync.JobResult) string {
-	var step *apiv1.StepResult
-	for i := range res.Steps {
-		if res.Steps[i].Name == res.Reason {
-			step = &res.Steps[i]
-			break
-		}
-	}
-	if step == nil {
-		return res.Reason
-	}
+// denyReason explains why a step denied a tag: the failed Wiz policies when a
+// wizcli unit reported them, otherwise the step's own reason.
+func denyReason(step apiv1.StepResult) string {
 	var policies []string
 	seen := map[string]bool{}
 	for _, unit := range step.Units {
@@ -146,11 +140,23 @@ func blockedDetail(res mirrorsync.JobResult) string {
 			}
 		}
 	}
-	switch {
-	case len(policies) > 0:
-		return res.Reason + ": " + strings.Join(policies, ", ")
-	case step.Reason != "":
-		return res.Reason + ": " + step.Reason
+	if len(policies) > 0 {
+		return strings.Join(policies, ", ")
+	}
+	return step.Reason
+}
+
+// blockedDetail names the hook step that blocked a tag and why. Reason holds
+// the step name for a blocked tag.
+func blockedDetail(res mirrorsync.JobResult) string {
+	for _, step := range res.Steps {
+		if step.Name != res.Reason {
+			continue
+		}
+		if reason := denyReason(step); reason != "" {
+			return res.Reason + ": " + reason
+		}
+		break
 	}
 	return res.Reason
 }

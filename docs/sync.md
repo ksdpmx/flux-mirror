@@ -135,10 +135,11 @@ Summary: 2 copied, 1 skipped, 1 blocked, 1 failed in 4.2s.
 When a [pre-copy hook](config.md#pre-copy-hooks) ran for a tag, one `pre hook`
 line per step is printed under its result line, in order: the verdict (`allow`,
 `deny`, `skip`, `error`) and how long the step took. A `skip` shows its reason.
-A step that failed with `onFailure: warn` does not stop the tag, so it is shown
-as `warn` with the first line of its error (cut at 120 characters), for example
+A step that denied the tag or errored but let it continue (`onDeny: warn` or
+`onError: warn`) is shown as `warn` with the failed policies or the first line of
+its error (cut at 120 characters), for example
 `pre hook vuln-scan: warn (5s): context deadline exceeded`; the report still
-records it as `verdict: error`. Tags that no hook ran for (up-to-date, drifted,
+records the real `verdict` and sets `continued: true`. Tags that no hook ran for (up-to-date, drifted,
 or no hooks configured) have none. A blocked tag prints the step that rejected
 it and, for `wizcli`, the policies that failed; it has no destination line
 because nothing was copied. Per-platform progress and retries are only logged
@@ -238,10 +239,11 @@ drifted tags, plus all tags under `--dry-run`, do not run hooks. Hook steps have
 their own timeout, concurrency, and retries; the copy's `--timeout` and
 `--retries` budget applies only after the gate allows it.
 
-A policy denial produces a `blocked` tag. An exhausted infrastructure error
-fails the tag by default; `onFailure: warn` records the error and continues to
-the copy. Failures take precedence over blocked tags, and blocked tags take
-precedence over drift when classifying the run.
+A policy denial produces a `blocked` tag unless the step sets `onDeny: warn`. An
+exhausted infrastructure error fails the tag by default; `onError: warn` records
+the error and continues to the copy. With `warn` the tag goes on to the next step
+and the copy and is reported as usual. Failures take precedence over blocked
+tags, and blocked tags take precedence over drift when classifying the run.
 
 A `wizcli` step reads the Wiz service account from the `WIZ_CLIENT_ID` and
 `WIZ_CLIENT_SECRET` environment variables and runs the `wizcli` binary found on

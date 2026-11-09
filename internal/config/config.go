@@ -604,11 +604,13 @@ func validateArtifactHooks(hooks apiv1.ArtifactHooks) error {
 		if step.Retries != nil && *step.Retries < 0 {
 			return fmt.Errorf("pre[%d].retries must be at least 0", i)
 		}
-		switch step.OnFailure {
-		case "", apiv1.HookFailureBlock, apiv1.HookFailureWarn:
-		default:
-			return fmt.Errorf("pre[%d].onFailure %q must be %q or %q",
-				i, step.OnFailure, apiv1.HookFailureBlock, apiv1.HookFailureWarn)
+		for field, value := range map[string]string{"onDeny": step.OnDeny, "onError": step.OnError} {
+			switch value {
+			case "", apiv1.HookActionBlock, apiv1.HookActionWarn:
+			default:
+				return fmt.Errorf("pre[%d].%s %q must be %q or %q",
+					i, field, value, apiv1.HookActionBlock, apiv1.HookActionWarn)
+			}
 		}
 		if err := validateHookProvider(step); err != nil {
 			return fmt.Errorf("pre[%d]: %w", i, err)

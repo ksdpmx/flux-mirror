@@ -205,8 +205,11 @@ type StepResult struct {
 	// Duration is the total step time, including retries.
 	Duration string `json:"duration"`
 
-	// Cosign carries the verified signature metadata when the provider is
-	// cosign and the signature passed.
+	// Continued is true when the step denied the tag or errored, but its
+	// onDeny or onError is "warn", so the tag went on to the next step and the
+	// copy. Verdict still holds the real result.
+	// +optional
+	Continued bool `json:"continued,omitempty"`
 	// +optional
 	Cosign *Verification `json:"cosign,omitempty"`
 
@@ -275,12 +278,13 @@ type StepVerdict string
 const (
 	// StepVerdictAllow permits the tag to continue through the mirror pipeline.
 	StepVerdictAllow StepVerdict = "allow"
-	// StepVerdictDeny blocks the tag as a policy rejection.
+	// StepVerdictDeny rejects the tag as a policy rejection. The tag is blocked
+	// unless the step sets onDeny to "warn".
 	StepVerdictDeny StepVerdict = "deny"
 	// StepVerdictSkip skips the tag without treating it as blocked.
 	StepVerdictSkip StepVerdict = "skip"
-	// StepVerdictError records an infrastructure error, optionally allowing
-	// the pipeline to continue when onFailure is "warn".
+	// StepVerdictError records an infrastructure error. The tag fails unless
+	// the step sets onError to "warn".
 	StepVerdictError StepVerdict = "error"
 )
 
