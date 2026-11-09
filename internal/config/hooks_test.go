@@ -114,6 +114,28 @@ func TestValidateArtifactHooks(t *testing.T) {
 			err: "onDeny",
 		},
 		{
+			name: "attestation entry is neither an alias nor a URI",
+			step: apiv1.HookStep{
+				Name: "signature", Provider: apiv1.HookProviderCosign,
+				Cosign: &apiv1.CosignHookConfig{
+					MatchOIDCIdentity: []apiv1.OIDCIdentity{{Issuer: "issuer", Subject: "subject"}},
+					Attestations:      []string{"sbom"},
+				},
+			},
+			err: `attestations[0] "sbom" must be one of cyclonedx, slsa-provenance, spdx or a predicate type URI`,
+		},
+		{
+			name: "attestation given as an alias and as its URI",
+			step: apiv1.HookStep{
+				Name: "signature", Provider: apiv1.HookProviderCosign,
+				Cosign: &apiv1.CosignHookConfig{
+					MatchOIDCIdentity: []apiv1.OIDCIdentity{{Issuer: "issuer", Subject: "subject"}},
+					Attestations:      []string{"spdx", "https://spdx.dev/Document"},
+				},
+			},
+			err: `attestations[1] "https://spdx.dev/Document" is duplicated by "spdx"`,
+		},
+		{
 			name: "invalid identity regex",
 			step: apiv1.HookStep{
 				Name: "signature", Provider: apiv1.HookProviderCosign,
@@ -175,6 +197,7 @@ func TestValidateArtifactHooks(t *testing.T) {
 		step.OnDeny = apiv1.HookActionWarn
 		step.OnError = apiv1.HookActionWarn
 		step.Cosign.MinAge = &metav1.Duration{Duration: time.Hour}
+		step.Cosign.Attestations = []string{"spdx", "slsa-provenance", "https://apko.dev/image-configuration"}
 		g.Expect(validateArtifactHooks(apiv1.ArtifactHooks{Pre: []apiv1.HookStep{step}})).To(Succeed())
 	})
 }

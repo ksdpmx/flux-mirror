@@ -638,6 +638,9 @@ func validateHookProvider(step apiv1.HookStep) error {
 		if err := validateVerification(verification); err != nil {
 			return fmt.Errorf("cosign: %w", err)
 		}
+		if err := validateAttestations(step.Cosign.Attestations); err != nil {
+			return fmt.Errorf("cosign: %w", err)
+		}
 	case apiv1.HookProviderWizcli:
 		if step.Cosign != nil {
 			return fmt.Errorf("cosign cannot be set for provider %q", step.Provider)
@@ -655,6 +658,24 @@ func validateHookProvider(step apiv1.HookStep) error {
 }
 
 var hookPlatformPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?$`)
+
+// validateAttestations requires each entry to be a known alias or a predicate
+// type URI, and rejects two entries that resolve to the same predicate type.
+func validateAttestations(entries []string) error {
+	seen := make(map[string]string, len(entries))
+	for i, entry := range entries {
+		predicateType, ok := apiv1.EffectivePredicateType(entry)
+		if !ok {
+			return fmt.Errorf("attestations[%d] %q must be one of %s or a predicate type URI",
+				i, entry, strings.Join(apiv1.PredicateTypeAliases(), ", "))
+		}
+		if first, dup := seen[predicateType]; dup {
+			return fmt.Errorf("attestations[%d] %q is duplicated by %q", i, entry, first)
+		}
+		seen[predicateType] = entry
+	}
+	return nil
+}
 
 func validateWizcliHook(c apiv1.WizcliHookConfig) error {
 	if len(c.Platforms) == 0 {

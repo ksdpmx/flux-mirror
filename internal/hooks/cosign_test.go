@@ -23,6 +23,27 @@ type fakeCosignVerifier struct {
 	info     *oci.VerificationInfo
 	err      error
 	discover oci.SignatureDiscoverer
+
+	attestationCalls int
+	attestationRef   string
+	attestationIDs   []apiv1.OIDCIdentity
+	attestationTypes []string
+	attestationOut   []string
+	attestationErr   error
+}
+
+func (v *fakeCosignVerifier) VerifyAttestations(
+	_ context.Context,
+	ref string,
+	identities []apiv1.OIDCIdentity,
+	required []string,
+	_ oci.AttestationDiscoverer,
+) ([]string, error) {
+	v.attestationCalls++
+	v.attestationRef = ref
+	v.attestationIDs = identities
+	v.attestationTypes = required
+	return v.attestationOut, v.attestationErr
 }
 
 func (v *fakeCosignVerifier) VerifyWithDiscovery(
@@ -166,4 +187,89 @@ func TestCosignStep_PropagatesInfrastructureError(t *testing.T) {
 		Source: "ghcr.io/example/image", Digest: "sha256:abc",
 	})
 	g.Expect(err).To(MatchError("registry unavailable"))
+}
+
+func attestationStep(t *testing.T, verifier *fakeCosignVerifier, attestations ...string) Step {
+	t.Helper()
+	step, err := CosignBuilder(verifier)(apiv1.HookStep{
+		Name:     "signature",
+		Provider: apiv1.HookProviderCosign,
+		Cosign: &apiv1.CosignHookConfig{
+			MatchOIDCIdentity: []apiv1.OIDCIdentity{{Issuer: "issuer", Subject: "subject"}},
+			Attestations:      attestations,
+		},
+	})
+	NewWithT(t).Expect(err).ToNot(HaveOccurred())
+	return step
+}
+
+func TestCosignStep_VerifiesAttestationsAfterTheSignature(t *testing.T) {
+	g := NewWithT(t)
+	verifier := &fakeCosignVerifier{
+		info:           &oci.VerificationInfo{Provider: apiv1.VerifyProviderCosign, Digest: "sha256:abc"},
+		attestationOut: []string{"https://spdx.dev/Document"},
+	}
+	step := attestationStep(t, verifier, "spdx")
+
+	outcome, err := runSingleUnit(step, Input{Source: "ghcr.io/example/image", Digest: "sha256:abc"})
+
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(verifier.attestationCalls).To(Equal(1))
+	g.Expect(verifier.attestationRef).To(Equal("ghcr.io/example/image@sha256:abc"))
+	g.Expect(verifier.attestationTypes).To(Equal([]string{"spdx"}))
+	g.Expect(verifier.attestationIDs).To(Equal([]apiv1.OIDCIdentity{{Issuer: "issuer", Subject: "subject"}}))
+	g.Expect(outcome.Verdict).To(Equal(apiv1.StepVerdictAllow))
+	g.Expect(outcome.Cosign.Attestations).To(Equal([]string{"https://spdx.dev/Document"}))
+}
+
+func TestCosignStep_DoesNotCheckAttestationsWhenNoneAreConfigured(t *testing.T) {
+	g := NewWithT(t)
+	verifier := &fakeCosignVerifier{info: &oci.VerificationInfo{Provider: apiv1.VerifyProviderCosign, Digest: "sha256:abc"}}
+	step := attestationStep(t, verifier)
+
+	outcome, err := runSingleUnit(step, Input{Source: "ghcr.io/example/image", Digest: "sha256:abc"})
+
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(verifier.attestationCalls).To(BeZero())
+	g.Expect(outcome.Cosign.Attestations).To(BeEmpty())
+}
+
+func TestCosignStep_MissingAttestationDenies(t *testing.T) {
+	g := NewWithT(t)
+	verifier := &fakeCosignVerifier{
+		info:           &oci.VerificationInfo{Provider: apiv1.VerifyProviderCosign, Digest: "sha256:abc"},
+		attestationErr: oci.NewSignatureRejectedError(errors.New("no verified attestation of type https://spdx.dev/Document")),
+	}
+	step := attestationStep(t, verifier, "spdx")
+
+	outcome, err := runSingleUnit(step, Input{Source: "ghcr.io/example/image", Digest: "sha256:abc"})
+
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(outcome.Verdict).To(Equal(apiv1.StepVerdictDeny))
+	g.Expect(outcome.Reason).To(ContainSubstring("no verified attestation of type https://spdx.dev/Document"))
+}
+
+func TestCosignStep_AttestationInfrastructureErrorIsAnError(t *testing.T) {
+	g := NewWithT(t)
+	verifier := &fakeCosignVerifier{
+		info:           &oci.VerificationInfo{Provider: apiv1.VerifyProviderCosign, Digest: "sha256:abc"},
+		attestationErr: errors.New("registry unavailable"),
+	}
+	step := attestationStep(t, verifier, "spdx")
+
+	_, err := runSingleUnit(step, Input{Source: "ghcr.io/example/image", Digest: "sha256:abc"})
+
+	g.Expect(err).To(MatchError("registry unavailable"))
+}
+
+func TestCosignStep_RejectedSignatureSkipsTheAttestationCheck(t *testing.T) {
+	g := NewWithT(t)
+	verifier := &fakeCosignVerifier{err: oci.NewSignatureRejectedError(errors.New("no matching signature"))}
+	step := attestationStep(t, verifier, "spdx")
+
+	outcome, err := runSingleUnit(step, Input{Source: "ghcr.io/example/image", Digest: "sha256:abc"})
+
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(outcome.Verdict).To(Equal(apiv1.StepVerdictDeny))
+	g.Expect(verifier.attestationCalls).To(BeZero())
 }

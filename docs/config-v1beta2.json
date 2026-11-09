@@ -44,6 +44,13 @@
                       "additionalProperties": false,
                       "description": "Cosign configures keyless cosign verification for this step.",
                       "properties": {
+                        "attestations": {
+                          "description": "Attestations lists the attestations that must be attached to the image\nand signed by one of MatchOIDCIdentity, each as a short alias (spdx,\nslsa-provenance, cyclonedx) or a full predicate type URI. They are read\nfrom the cosign tag-based .att tag of the verified digest.",
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
                         "matchOIDCIdentity": {
                           "description": "MatchOIDCIdentity lists the Fulcio certificate identities to accept.",
                           "items": {

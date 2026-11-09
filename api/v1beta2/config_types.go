@@ -4,6 +4,7 @@
 package v1beta2
 
 import (
+	"sort"
 	"strings"
 	"time"
 
@@ -629,6 +630,44 @@ type CosignHookConfig struct {
 	// MinAge requires a signature to be at least this old before mirroring.
 	// +optional
 	MinAge *metav1.Duration `json:"minAge,omitempty"`
+
+	// Attestations lists the attestations that must be attached to the image
+	// and signed by one of MatchOIDCIdentity, each as a short alias (spdx,
+	// slsa-provenance, cyclonedx) or a full predicate type URI. They are read
+	// from the cosign tag-based .att tag of the verified digest.
+	// +optional
+	Attestations []string `json:"attestations,omitempty"`
+}
+
+// predicateTypeAliases maps the short attestation names accepted in
+// CosignHookConfig.Attestations to their in-toto predicate type URIs.
+var predicateTypeAliases = map[string]string{
+	"spdx":            "https://spdx.dev/Document",
+	"slsa-provenance": "https://slsa.dev/provenance/v1",
+	"cyclonedx":       "https://cyclonedx.org/bom",
+}
+
+// PredicateTypeAliases returns the short attestation names, for messages.
+func PredicateTypeAliases() []string {
+	aliases := make([]string, 0, len(predicateTypeAliases))
+	for alias := range predicateTypeAliases {
+		aliases = append(aliases, alias)
+	}
+	sort.Strings(aliases)
+	return aliases
+}
+
+// EffectivePredicateType resolves an attestation entry to a predicate type
+// URI. A known alias is expanded; a value that has a URI scheme is returned
+// as is; anything else is not a predicate type and yields false.
+func EffectivePredicateType(entry string) (string, bool) {
+	if uri, ok := predicateTypeAliases[entry]; ok {
+		return uri, true
+	}
+	if scheme, rest, ok := strings.Cut(entry, "://"); ok && scheme != "" && rest != "" {
+		return entry, true
+	}
+	return "", false
 }
 
 // WizcliHookConfig configures Wiz CLI container image scans for a hook.

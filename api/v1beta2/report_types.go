@@ -335,6 +335,11 @@ type Verification struct {
 	// MinAge is the configured minimum age on the signature-too-new skip.
 	// +optional
 	MinAge string `json:"minAge,omitempty"`
+
+	// Attestations lists the predicate types of the attestations that were
+	// verified for the digest, as full predicate type URIs.
+	// +optional
+	Attestations []string `json:"attestations,omitempty"`
 }
 
 // Status is the result of one mirror job, or runner-assigned on failure.

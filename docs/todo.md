@@ -690,8 +690,9 @@ scans a directory; both accept `--policies`, `--projects`, `--timeout`,
   - Verified: the CronJob runs in Kubernetes with the Linux binary, which
     covers the alpine run, the Wiz egress and memory use. Still open: the
     `AUDIT`-only verdict (S1).
-- **S18. The `cosign` step verifies signatures only, not attestations (to
-  decide).** Both discovery paths look for a signature and nothing else:
+- **S18. The `cosign` step verified signatures only, not attestations
+  (tag path done; referrers and per-platform open).** Both discovery paths look
+  for a signature and nothing else:
   - Referrers (`cosign_discovery.go`): only a sigstore bundle, that is a
     referrer whose media type starts with `application/vnd.dev.sigstore.bundle`
     and is version `v0.3` or later.
@@ -702,8 +703,8 @@ scans a directory; both accept `--policies`, `--projects`, `--timeout`,
     nor checked, even when it exists or was tampered with. `includeReferrers`
     only copies those referrers as they are. `matchOIDCIdentity` limits who
     signed the image, not what is attached to it.
-  - Document it in `docs/config.md` (the `cosign` step) so a user does not
-    assume attestations are checked.
+  - Documented in `docs/config.md` (the `cosign` step): only the listed
+    attestation types are checked, and only through the `.att` tag.
   - **Risk to verify: the referrers path takes the first sigstore bundle,
     whatever it holds.** `findReferrerSigstoreBundle` returns the first referrer
     with a single layer whose media type starts with
@@ -768,6 +769,26 @@ scans a directory; both accept `--policies`, `--projects`, `--timeout`,
       chart schema and tests); per-platform checks wait for S5.
     - The spike program was in `/tmp/spike` (not in the repository): it fetched
       `<digest>.att`, built a bundle per layer and ran `verify.Verify`.
+  - **Implemented (tag path, index digest only).** `cosign.attestations` takes
+    aliases (`spdx`, `slsa-provenance`, `cyclonedx`) or predicate type URIs;
+    `internal/hooks/cosign_attestation_discovery.go` rebuilds each `.att` DSSE
+    layer as a bundle, and `Verifier.VerifyAttestations` (in
+    `internal/oci/verify_discovery.go`, so `verify.go` stays identical to
+    upstream) verifies each bundle against the digest and the same
+    `matchOIDCIdentity`, then requires every listed predicate type among the
+    verified statements. A missing type denies the tag; `cosign.attestations` in
+    the report lists the verified types. Checked end to end against
+    `cgr.dev/lexisnexislegal.com/amazon-k8s-cni-init:v1.23.2`: the four
+    attestations (SLSA provenance, CycloneDX, SPDX, apko configuration) verify
+    with the same `https://issuer.enforce.dev/...` identity as the signature, so
+    no separate attestation identity was needed, and requiring a type that is not
+    attached blocks the tag. Tests use sigstore-go's virtual sigstore, which adds
+    indirect test dependencies to `go.mod`.
+  - Still open: attestations through the referrers path (and the first-bundle
+    risk above), per-platform `.sig`/`.att` (S5), an optional identity per
+    attestation if one is ever signed by another identity, and `.att` layers that
+    cannot be read are skipped without a message (the denial only names the
+    missing type and the counts).
 
 ## Backlog
 

@@ -295,6 +295,23 @@ their verified Rekor integrated time is old enough; too-new signatures yield
 timestamp fails when `minAge` is configured. An entry cannot combine `verify:`
 and `hooks.pre`, because that would verify each tag twice.
 
+`cosign.attestations` is an optional list of attestations that must be attached
+to the image, each signed by one of `matchOIDCIdentity` (the same identities as
+the signature). An entry is a short alias, `spdx` (`https://spdx.dev/Document`),
+`slsa-provenance` (`https://slsa.dev/provenance/v1`) or `cyclonedx`
+(`https://cyclonedx.org/bom`), or a full predicate type URI such as
+`https://apko.dev/image-configuration`; two entries that mean the same type are
+rejected. The step runs after the signature check and denies the tag when a
+listed type is missing or does not verify. The predicate type is read from the
+verified in-toto statement, which must be about the digest being mirrored, and
+not from the registry's annotations, which are not signed. Attestations are read
+from cosign's `sha256-<digest>.att` tag of the mirrored digest (for a
+multi-arch image that is the index, not the platform images), and an `.att`
+layer that cannot be read counts as missing. Only the listed types are checked:
+other attestations attached to the image are neither required nor verified, and
+the signature check itself is not changed. `minAge` applies to the signature
+only. Attestations are not discovered through the referrers API yet.
+
 Common step controls are optional:
 
 - `.timeout` is the total step budget for a tag, including retries; it defaults
@@ -960,6 +977,7 @@ first mirrored. Referrers that exist with a different digest are skipped
 | `artifacts[].verify`                 | unset      |
 | `artifacts[].hooks`                  | unset      |
 | `artifacts[].hooks.pre[].cosign.minAge` | unset     |
+| `artifacts[].hooks.pre[].cosign.attestations` | unset |
 | `artifacts[].hooks.pre[].timeout`    | `--timeout` |
 | `artifacts[].hooks.pre[].concurrency` | `1`       |
 | `artifacts[].hooks.pre[].retries`    | `0`        |

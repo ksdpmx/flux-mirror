@@ -156,6 +156,13 @@
                                 "description": "Age is the signature age on the signature-too-new skip.",
                                 "type": "string"
                               },
+                              "attestations": {
+                                "description": "Attestations lists the predicate types of the attestations that were\nverified for the digest, as full predicate type URIs.",
+                                "items": {
+                                  "type": "string"
+                                },
+                                "type": "array"
+                              },
                               "identity": {
                                 "description": "Identity is the recovered keyless certificate identity.",
                                 "type": "string"
@@ -309,6 +316,13 @@
                         "age": {
                           "description": "Age is the signature age on the signature-too-new skip.",
                           "type": "string"
+                        },
+                        "attestations": {
+                          "description": "Attestations lists the predicate types of the attestations that were\nverified for the digest, as full predicate type URIs.",
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
                         },
                         "identity": {
                           "description": "Identity is the recovered keyless certificate identity.",

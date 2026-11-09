@@ -145,6 +145,7 @@ verification. Only `provider` is guaranteed; the rest is best-effort.
 | `integratedTime` | Transparency-log integration time (RFC 3339). Present only when the bundle carries a Tlog timestamp. |
 | `age`            | Signature age, as a Go duration string. Present only on a `signature-too-new` skip.                  |
 | `minAge`         | Configured `verify.minAge` or `hooks.pre[].cosign.minAge`. Present only on a `signature-too-new` skip. |
+| `attestations`   | Predicate type URIs of the attestations that were verified for the digest. Present only on a `steps[]` row whose `cosign.attestations` listed some. |
 
 ## Hook step fields
 

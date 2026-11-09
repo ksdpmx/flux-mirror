@@ -15,6 +15,7 @@ import (
 
 type cosignVerifier interface {
 	VerifyWithDiscovery(context.Context, string, apiv1.ArtifactVerification, oci.SignatureDiscoverer) (*oci.VerificationInfo, error)
+	VerifyAttestations(context.Context, string, []apiv1.OIDCIdentity, []string, oci.AttestationDiscoverer) ([]string, error)
 }
 
 // CosignBuilder creates the cosign signature verification provider.
@@ -33,13 +34,15 @@ func CosignBuilder(verifier cosignVerifier) Builder {
 				MatchOIDCIdentity: config.Cosign.MatchOIDCIdentity,
 				MinAge:            config.Cosign.MinAge,
 			},
+			attestations: config.Cosign.Attestations,
 		}.Run), nil
 	}
 }
 
 type cosignStep struct {
-	verifier cosignVerifier
-	config   apiv1.ArtifactVerification
+	verifier     cosignVerifier
+	config       apiv1.ArtifactVerification
+	attestations []string
 }
 
 func (s cosignStep) Run(ctx context.Context, input Input) (Outcome, error) {
@@ -73,9 +76,22 @@ func (s cosignStep) Run(ctx context.Context, input Input) (Outcome, error) {
 		return Outcome{}, fmt.Errorf("cosign verifier returned digest %q, want %q", info.Digest, input.Digest)
 	}
 
+	verification := cosignVerification(info, nil)
+	if len(s.attestations) > 0 {
+		types, err := s.verifier.VerifyAttestations(ctx, ref, s.config.MatchOIDCIdentity, s.attestations, discoverCosignAttestations)
+		if err != nil {
+			var rejected *oci.SignatureRejectedError
+			if errors.As(err, &rejected) {
+				return Outcome{Verdict: apiv1.StepVerdictDeny, Reason: rejected.Error()}, nil
+			}
+			return Outcome{}, err
+		}
+		verification.Attestations = types
+	}
+
 	return Outcome{
 		Verdict: apiv1.StepVerdictAllow,
-		Cosign:  cosignVerification(info, nil),
+		Cosign:  verification,
 	}, nil
 }
 
