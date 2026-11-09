@@ -173,13 +173,15 @@ provider and its initContainer (S1 to S10, S17). Then the chart `hooks` values,
 `charts` support, retag (B7) and prune (B8).
 
 Status: PR1, PR2 and the `wizcli` provider of PR3 are implemented in this
-repository (`internal/hooks`). Not done: the `sk8s-flux-mirror` chart and the
-initContainer that delivers the `wizcli` binary (S8, S17, outside this
-repository), `hooks` for `charts` entries, the `AUDIT`-only verdict check and a
-Linux run of the binary (S1), whether `scan dir` renders chart templates (S3),
-and a `wiz-api` provider (S7). Implemented as decided in S5: the step
-`concurrency` counts work units (`tag x platform` for `wizcli`), and
-`wizcli.platforms` is required.
+repository (`internal/hooks`), and `--verbose` logs each hook run, step and
+per-platform unit. Blocked tags print the step and failed policies in the text
+output. The `sk8s-flux-mirror` chart (S8) and the initContainer that delivers the
+`wizcli` binary (S17) are done and ran in a Kubernetes CronJob. Not done:
+`hooks` for `charts` entries, the `AUDIT`-only verdict check (S1), whether
+`scan dir` renders chart templates (S3), `cosign` work units per platform
+(S5), `hooks.post` (S13), and a `wiz-api` provider (S7). Implemented as decided
+in S5: the step `concurrency` counts work units (`tag x platform` for `wizcli`),
+and `wizcli.platforms` is required.
 
 Goal: an ordered `hooks.pre` list on `artifacts[]` and `charts[]` whose steps
 can block a tag or version from being mirrored, like `verify` but pluggable. The
@@ -481,10 +483,19 @@ scans a directory; both accept `--policies`, `--projects`, `--timeout`,
   Schemas; update `docs/config.md`, `docs/report.md`, `docs/sync.md`.
 - **S7. `wiz-api` provider.** Registry-connector results arrive asynchronously.
   Decide what a missing result means: wait with a timeout, fail, or allow.
-- **S8. Helm chart `sk8s-flux-mirror`.** Values for `hooks` in
-  `mirror.defaults.*` and per entry (lists are replaced as a whole by the
-  per-entry value, not merged by position; document it), ExternalSecret keys for
-  the Wiz service account, and the `wizcli` delivery decided in S17.
+- **S8. Helm chart `sk8s-flux-mirror` (done, chart 1.3.0).** Values for `hooks` in
+  `mirror.defaults.artifacts` and per entry (lists are replaced as a whole by the
+  per-entry value, not merged by position; an empty list turns the defaults off),
+  `initContainers.wizcli` for the delivery decided in S17, and
+  `cronjob.blockedExitCode`. Credentials sit next to their consumers: a host
+  `credential` is `{awsSecretId, property}` and `initContainers.wizcli.credential`
+  carries the Wiz service account, and the chart builds the ExternalSecret from
+  them (`externalSecret.enabled`/`secrets` were removed). The chart `verify`
+  values were removed in favor of a `cosign` step. Rendering rejects a provider
+  block that does not match `provider`, duplicate step names in an entry, and a
+  wizcli step without the image or the credential. Not handled: a `binaryPath`
+  inside the `/opt/wiz` mount hides the source binary in the initContainer
+  (rejecting it, or a separate init-only mount path, are the options).
 - **S9. Tests.** A fake `wizcli` script on `PATH` for pass, block, timeout and
   JSON output; no real Wiz in CI.
 - **S10. Open risks.** Whether `wizcli` can be redistributed in a public image;
@@ -648,7 +659,8 @@ scans a directory; both accept `--policies`, `--projects`, `--timeout`,
   flux-mirror; B8 (prune) only covers tags the source no longer has. The
   `wiz-api` provider (S7) and a post step that asks the connector to scan a new
   digest (S11) are links to this process, not replacements for it.
-- **S17. Delivering `wizcli` to the CronJob: initContainer (decided).** flux-mirror
+- **S17. Delivering `wizcli` to the CronJob: initContainer (decided, done).**
+  flux-mirror
   runs `wizcli` as a subprocess in the main container, so the binary must be on
   its filesystem. Chosen: an initContainer copies the binary from a dedicated
   internal image into an `emptyDir` that the main container mounts (for example at
@@ -664,13 +676,95 @@ scans a directory; both accept `--policies`, `--projects`, `--timeout`,
   - The `wizcli` image: built by us from `alpine` plus the `downloads.wiz.io`
     binary with a pinned version and its sha256, pushed to the private ECR. Check
     whether Wiz publishes an official container image and use it if so.
-  - Chart work: an initContainer and an `emptyDir` for the binary; a second
-    `emptyDir` for tars and extracted charts with a configurable `sizeLimit`; a
-    writable `HOME` for `wizcli` (it writes `~/.wiz`, and the main container runs
-    as `65534`); resources for `wizcli`; the image tag and checksum as values.
-  - To verify: the Linux binary runs on alpine (static or not), which Wiz
-    domains it needs (at least `auth.app.wiz.io`) for NetworkPolicy or egress
-    proxy rules, and memory use on large images.
+  - Chart work (done): an initContainer copies the binary into an `emptyDir`
+    mounted read-only at `/opt/wiz`, and the chart sets the step's
+    `wizcli.binary` to `/opt/wiz/wizcli`; a second `emptyDir` at `/tmp/wizcli`
+    with a configurable `sizeLimit` (`initContainers.wizcli.workDirSizeLimit`,
+    default `2Gi`, about `concurrency` image tarballs at a time) holds tars and
+    the `wizcli` state, with `HOME` and `TMPDIR` pointing to it; the Wiz service
+    account comes from the ExternalSecret; the image tag is a value. Only the
+    CronJobs whose group has a wizcli step get these.
+  - Verified: the CronJob runs in Kubernetes with the Linux binary, which
+    covers the alpine run, the Wiz egress and memory use. Still open: the
+    `AUDIT`-only verdict (S1).
+- **S18. The `cosign` step verifies signatures only, not attestations (to
+  decide).** Both discovery paths look for a signature and nothing else:
+  - Referrers (`cosign_discovery.go`): only a sigstore bundle, that is a
+    referrer whose media type starts with `application/vnd.dev.sigstore.bundle`
+    and is version `v0.3` or later.
+  - Tag discovery (`cosign_tag_discovery.go`): only `sha256-<digest>.sig`, with
+    layer media type `application/vnd.dev.cosign.simplesigning.v1+json`, and it
+    needs a certificate (keyless). `sha256-<digest>.att` is never read.
+  - So an SBOM, a SLSA provenance or any other attestation is neither required
+    nor checked, even when it exists or was tampered with. `includeReferrers`
+    only copies those referrers as they are. `matchOIDCIdentity` limits who
+    signed the image, not what is attached to it.
+  - Document it in `docs/config.md` (the `cosign` step) so a user does not
+    assume attestations are checked.
+  - **Risk to verify: the referrers path takes the first sigstore bundle,
+    whatever it holds.** `findReferrerSigstoreBundle` returns the first referrer
+    with a single layer whose media type starts with
+    `application/vnd.dev.sigstore.bundle`, and verification uses only that one.
+    An attestation published as a bundle (a DSSE envelope with an in-toto
+    statement) has the same media type as a signature bundle, so it is a
+    candidate too. Possible effects, from reading the code and not yet tested:
+    the result depends on the order of the referrers; an attestation that comes
+    first and fails the identity or digest check denies the tag even though a
+    valid signature bundle follows; and an attestation signed by a trusted
+    identity for the same digest can pass as if it were the signature. To check
+    first: list the referrers of a real `cgr.dev` image, count the bundles and
+    look at their order and content type. If confirmed, accept only a bundle
+    whose content is a message signature (skip DSSE attestations) and try every
+    candidate before denying, with a test for each order. The tag path is not
+    affected, because it reads one fixed tag.
+  - If attestation checks are wanted: decide the shape first, for example a
+    `requireAttestations` list of predicate types (`slsaprovenance`, `spdx`,
+    `cyclonedx`, `vuln`) verified against the same `matchOIDCIdentity`, found
+    through referrers and the `.att` tag; whether a missing attestation denies or
+    only warns (`onFailure`); and, per platform, the work units (S5).
+    Chainguard publishes both signatures and attestations, so check a real
+    `cgr.dev` image first.
+  - **Spike result for the tag path (2026-11-09, `cgr.dev/chainguard/static`,
+    sigstore-go 1.3.0): attestations can be verified.**
+    - Layout of a multi-arch image: the index and each platform manifest have
+      their own `sha256-<digest>.sig` and `.att`. A `.att` manifest has one layer
+      per predicate (`https://slsa.dev/provenance/v1`, `https://spdx.dev/Document`,
+      `https://apko.dev/image-configuration`). Each layer is a DSSE envelope
+      (`application/vnd.dsse.envelope.v1+json`) whose in-toto statement has the
+      digest of the image it is attached to as its subject (the index digest for
+      the index `.att`, the platform manifest digest for a platform `.att`).
+      The signature material is in the layer annotations
+      (`dev.cosignproject.cosign/signature`, `/certificate`, `/chain`, `/bundle`),
+      like a `.sig`.
+    - Verification works: a bundle built from one layer (the DSSE envelope as
+      content, the same certificate chain and Rekor SET handling as for a `.sig`,
+      bundle version `0.1`) passed `verify.Verify` with `WithArtifactDigest` and a
+      certificate identity, for all three layers of the index and of the amd64
+      manifest. The Rekor entry kind is `dsse` (`0.0.1`), not `intoto`, so
+      `decodeCosignTagTlogEntries` needs no change.
+    - Negative cases fail as wanted: an artifact digest that is not the
+      statement subject (`provided artifact digest does not match any digest in
+      statement`) and a non-matching identity (`no matching CertificateIdentity
+      found`).
+    - Take the predicate type from the verified statement
+      (`result.Statement.PredicateType`), never from the layer annotation
+      `predicateType`, which is not signed.
+    - The public Chainguard images are signed by the GitHub Actions workflow
+      identity (`https://github.com/chainguard-images/images/.github/workflows/release.yaml@refs/heads/main`,
+      issuer `https://token.actions.githubusercontent.com`), not by
+      `issuer.enforce.dev` as in our `matchOIDCIdentity`. Check that the same
+      identity signs the `.att` of our own `cgr.dev` org images before reusing the
+      signature identities for attestations; allow a separate `matchOIDCIdentity`
+      per attestation if they differ.
+    - Decided: scope is the index only for now (no per-platform units, so the
+      work-unit model stays one unit per tag); the list is
+      `cosign.attestations`, each item a short alias (`spdx`, `slsa-provenance`,
+      `cyclonedx`, a small fixed set) or a full predicate type URI. Open: implement
+      as a single change (discovery with a `.att` suffix, a DSSE bundle builder,
+      config and validation, the verified predicate types in the report, docs,
+      chart schema and tests); per-platform checks wait for S5.
+    - The spike program was in `/tmp/spike` (not in the repository): it fetched
+      `<digest>.att`, built a bundle per layer and ran `verify.Verify`.
 
 ## Backlog
 
