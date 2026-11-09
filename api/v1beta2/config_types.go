@@ -27,6 +27,8 @@ const (
 
 	// HookProviderCosign selects cosign keyless signature checks in hooks.
 	HookProviderCosign = "cosign"
+	// HookProviderWizcli selects Wiz CLI vulnerability and policy scans in hooks.
+	HookProviderWizcli = "wizcli"
 
 	// HookFailureBlock blocks the tag when a hook step errors.
 	HookFailureBlock = "block"
@@ -575,7 +577,7 @@ type HookStep struct {
 	Name string `json:"name"`
 
 	// Provider selects the hook implementation.
-	// +kubebuilder:validation:Enum=cosign
+	// +kubebuilder:validation:Enum=cosign;wizcli
 	Provider string `json:"provider"`
 
 	// Timeout is the total time allowed for this step, including retries.
@@ -583,8 +585,9 @@ type HookStep struct {
 	// +optional
 	Timeout *metav1.Duration `json:"timeout,omitempty"`
 
-	// Concurrency caps the number of tags executing this step at once.
-	// Defaults to 1.
+	// Concurrency caps the number of work units executing this step at once. A
+	// work unit is one verification or scan task: a tag for cosign, one tag and
+	// platform for wizcli. Defaults to 1.
 	// +optional
 	Concurrency *int `json:"concurrency,omitempty"`
 
@@ -602,6 +605,10 @@ type HookStep struct {
 	// Cosign configures keyless cosign verification for this step.
 	// +optional
 	Cosign *CosignHookConfig `json:"cosign,omitempty"`
+
+	// Wizcli configures Wiz CLI scans for this step.
+	// +optional
+	Wizcli *WizcliHookConfig `json:"wizcli,omitempty"`
 }
 
 // CosignHookConfig configures cosign signature identity matching for a hook.
@@ -612,6 +619,27 @@ type CosignHookConfig struct {
 	// MinAge requires a signature to be at least this old before mirroring.
 	// +optional
 	MinAge *metav1.Duration `json:"minAge,omitempty"`
+}
+
+// WizcliHookConfig configures Wiz CLI container image scans for a hook.
+// Credentials are never part of the config: wizcli reads WIZ_CLIENT_ID and
+// WIZ_CLIENT_SECRET from the environment.
+type WizcliHookConfig struct {
+	// Platforms lists the platforms to scan, each as os/arch or os/arch/variant
+	// (for example linux/amd64). Every platform is scanned as its own work unit;
+	// the tag passes only when all of them pass. A platform missing from the
+	// source image index is an error.
+	// +kubebuilder:validation:MinItems=1
+	Platforms []string `json:"platforms"`
+
+	// Policies lists the Wiz policies to apply. When omitted, wizcli evaluates
+	// every policy of the account that applies to CLI scans.
+	// +optional
+	Policies []string `json:"policies,omitempty"`
+
+	// Binary is the wizcli executable. Defaults to wizcli, resolved on PATH.
+	// +optional
+	Binary string `json:"binary,omitempty"`
 }
 
 // OIDCIdentity matches a Fulcio certificate identity.

@@ -30,8 +30,9 @@ on upstream chart repositories.
 - **OCI 1.1 referrers** — opt-in mirror of signatures, SBOMs, and attestations attached to artifacts.
 - **Cosign verification** — opt-in keyless signature verification for selected
   source artifacts before they are mirrored, with optional minimum signature age.
-- **Pre-copy gates** — ordered per-tag hooks for OCI artifacts; the initial
-  `cosign` provider checks keyless signatures via OCI referrers or legacy tags.
+- **Pre-copy gates** — ordered per-tag hooks for OCI artifacts: `cosign` checks
+  keyless signatures via OCI referrers or legacy tags, and `wizcli` scans the
+  image per platform with the Wiz CLI.
 - **Selector pipeline** — the same four-step `regex → semver → sort → top-N`
   filter for OCI artifacts and Helm charts. Sort by `semver`, `alphabetical`, or
   `numerical`.

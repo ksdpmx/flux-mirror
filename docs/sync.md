@@ -211,6 +211,11 @@ fails the tag by default; `onFailure: warn` records the error and continues to
 the copy. Failures take precedence over blocked tags, and blocked tags take
 precedence over drift when classifying the run.
 
+A `wizcli` step reads the Wiz service account from the `WIZ_CLIENT_ID` and
+`WIZ_CLIENT_SECRET` environment variables and runs the `wizcli` binary found on
+`PATH` (or `wizcli.binary`); see [Wiz CLI scans](config.md#wiz-cli-scans) for
+the requirements, including temporary disk space for the image tarballs.
+
 ## Exit codes
 
 | Code | Meaning                                                                                                                |

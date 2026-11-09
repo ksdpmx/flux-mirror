@@ -167,6 +167,95 @@ func TestValidateArtifactHooks(t *testing.T) {
 	})
 }
 
+func TestValidateWizcliHook(t *testing.T) {
+	wizcliStep := func(mutate func(*apiv1.HookStep)) apiv1.HookStep {
+		step := apiv1.HookStep{
+			Name:     "vuln-scan",
+			Provider: apiv1.HookProviderWizcli,
+			Wizcli: &apiv1.WizcliHookConfig{
+				Platforms: []string{"linux/amd64", "linux/arm64/v8"},
+				Policies:  []string{"prod-vuln"},
+			},
+		}
+		if mutate != nil {
+			mutate(&step)
+		}
+		return step
+	}
+	tests := []struct {
+		name   string
+		mutate func(*apiv1.HookStep)
+		err    string
+	}{
+		{name: "valid"},
+		{name: "valid without policies", mutate: func(s *apiv1.HookStep) { s.Wizcli.Policies = nil }},
+		{name: "missing wizcli block", mutate: func(s *apiv1.HookStep) { s.Wizcli = nil }, err: "wizcli is required"},
+		{
+			name: "cosign block on wizcli provider",
+			mutate: func(s *apiv1.HookStep) {
+				s.Cosign = validHookStep().Cosign
+			},
+			err: "cosign cannot be set",
+		},
+		{name: "no platforms", mutate: func(s *apiv1.HookStep) { s.Wizcli.Platforms = nil }, err: "at least one platform"},
+		{name: "platform without os", mutate: func(s *apiv1.HookStep) { s.Wizcli.Platforms = []string{"amd64"} }, err: "os/arch"},
+		{name: "empty platform", mutate: func(s *apiv1.HookStep) { s.Wizcli.Platforms = []string{""} }, err: "os/arch"},
+		{
+			name:   "duplicate platform",
+			mutate: func(s *apiv1.HookStep) { s.Wizcli.Platforms = []string{"linux/amd64", "linux/amd64"} },
+			err:    "is duplicated",
+		},
+		{name: "empty policy", mutate: func(s *apiv1.HookStep) { s.Wizcli.Policies = []string{" "} }, err: "must not be empty"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+			err := validateArtifactHooks(apiv1.ArtifactHooks{Pre: []apiv1.HookStep{wizcliStep(tt.mutate)}})
+			if tt.err == "" {
+				g.Expect(err).ToNot(HaveOccurred())
+			} else {
+				g.Expect(err).To(MatchError(ContainSubstring(tt.err)))
+			}
+		})
+	}
+
+	t.Run("wizcli block on cosign provider", func(t *testing.T) {
+		g := NewWithT(t)
+		step := validHookStep()
+		step.Wizcli = wizcliStep(nil).Wizcli
+		err := validateArtifactHooks(apiv1.ArtifactHooks{Pre: []apiv1.HookStep{step}})
+		g.Expect(err).To(MatchError(ContainSubstring("wizcli cannot be set")))
+	})
+
+	t.Run("decodes from YAML", func(t *testing.T) {
+		g := NewWithT(t)
+		raw := `apiVersion: mirror.plugin.fluxcd.io/v1beta2
+kind: Config
+artifacts:
+  - source: ghcr.io/example/image
+    destination: quay.io/mirror/image
+    selector:
+      semver: ">=1.0.0"
+    hooks:
+      pre:
+        - name: vuln-scan
+          provider: wizcli
+          concurrency: 2
+          retries: 1
+          wizcli:
+            platforms: [linux/amd64, linux/arm64]
+            policies: [prod-vuln]
+`
+		cfg, _, err := Decode(strings.NewReader(raw))
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(Validate(cfg)).To(Succeed())
+		g.Expect(cfg.Artifacts[0].Hooks.Pre[0].Wizcli.Platforms).To(Equal([]string{"linux/amd64", "linux/arm64"}))
+
+		_, _, err = Decode(strings.NewReader(strings.Replace(raw, "policies: [prod-vuln]", "projects: [p1]", 1)))
+		g.Expect(err).To(MatchError(ContainSubstring("unknown field")))
+	})
+}
+
 func TestDecodeAndValidateHooks(t *testing.T) {
 	g := NewWithT(t)
 	raw := `apiVersion: mirror.plugin.fluxcd.io/v1beta2

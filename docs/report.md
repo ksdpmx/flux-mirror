@@ -162,13 +162,40 @@ records the error and lets mirroring continue. A too-new cosign signature is a
 | Key        | Description                                                        |
 |------------|--------------------------------------------------------------------|
 | `name`     | Configured step name.                                              |
-| `provider` | Hook provider, such as `cosign`.                                   |
+| `provider` | Hook provider, `cosign` or `wizcli`.                               |
 | `verdict`  | `allow`, `deny`, `skip`, or `error`.                                |
 | `reason`   | Provider explanation for a deny or skip.                           |
 | `error`    | Infrastructure error after retries.                                |
-| `attempts` | Number of attempts made.                                           |
+| `attempts` | Number of attempts made, summed over the step's units.             |
 | `duration` | Total step time, including retries, as a Go duration string.       |
 | `cosign`   | Verified signature metadata for a passing cosign step, when set.   |
+| `units[]`  | Per-unit results, present only when the step has named units.      |
+
+A step whose work splits into named units, such as `wizcli` with one unit per
+platform, adds `units[]`. The step `verdict`, `reason`, and `error` are the
+aggregate of its units: a denied unit denies the step (its `reason` lists each
+denied unit as `<unit>: <reason>`), otherwise an errored unit makes the step an
+error, otherwise a skipped unit skips it. Each unit row has:
+
+| Key        | Description                                                          |
+|------------|----------------------------------------------------------------------|
+| `name`     | Unit name, the platform such as `linux/amd64`.                       |
+| `verdict`  | `allow`, `deny`, `skip`, or `error`.                                  |
+| `reason`   | Explanation for a deny or skip.                                      |
+| `error`    | Infrastructure error after the unit's retries.                       |
+| `attempts` | Number of attempts made for this unit.                               |
+| `duration` | Unit time, including retries and waiting for a free slot.            |
+| `wizcli`   | Scan result of a `wizcli` unit (below).                              |
+
+The `wizcli` object keeps only what the report needs; the Wiz scan document
+itself is never copied because it names the user who ran the scan:
+
+| Key              | Description                                                      |
+|------------------|------------------------------------------------------------------|
+| `digest`         | Manifest digest of the scanned platform image.                   |
+| `scanId`         | Wiz scan identifier.                                             |
+| `verdict`        | Wiz verdict, for example `PASSED_BY_POLICY` or `FAILED_BY_POLICY`. |
+| `failedPolicies` | Names of the policies that rejected the image.                   |
 
 A verify *failure* (bad/missing signature, OIDC mismatch) is not a `verification` block:
 it surfaces as a `status: "failed"` tag row carrying the verify `error`, with no

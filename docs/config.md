@@ -276,15 +276,18 @@ artifacts:
 #### Pre-copy hooks
 
 `.artifacts[].hooks.pre` is an optional ordered list of checks that run after
-the source/destination comparison and before copying a tag. The first release
-supports the `cosign` provider, which verifies keyless signatures discovered
-through the OCI 1.1 referrers API, falling back to cosign's legacy
-`sha256-<digest>.sig` tag discovery when no referrer bundle is present. Hooks
+the source/destination comparison and before copying a tag. Two providers are
+available: `cosign`, which verifies keyless signatures discovered through the
+OCI 1.1 referrers API, falling back to cosign's legacy `sha256-<digest>.sig` tag
+discovery when no referrer bundle is present, and `wizcli`, which scans the
+image with the Wiz CLI (see [Wiz CLI scans](#wiz-cli-scans)). Steps run in
+order and the first step that denies, skips, or fails stops the chain. Hooks
 are not run for up-to-date or drifted tags, or under `--dry-run`; `charts[]`
 does not support hooks yet.
 
-Each step has a unique lowercase `.name`, a `.provider`, and a provider-specific
-configuration block named after that provider. `cosign.matchOIDCIdentity`
+Each step has a unique lowercase `.name`, a `.provider`, and exactly the
+configuration block named after that provider; a missing or misplaced block is
+rejected. `cosign.matchOIDCIdentity`
 uses the same issuer and subject-regexp rules as [`verify`](#signature-verification).
 `cosign.minAge` is an optional duration that defers valid signatures until
 their verified Rekor integrated time is old enough; too-new signatures yield
@@ -294,13 +297,21 @@ and `hooks.pre`, because that would verify each tag twice.
 
 Common step controls are optional:
 
-- `.timeout` is the total step budget, including retries; it defaults to
-  `--timeout`.
-- `.concurrency` caps simultaneous tags running this step; it defaults to `1`.
-- `.retries` is the number of extra attempts after an infrastructure error; it
-  defaults to `0`. Policy denials are not retried.
+- `.timeout` is the total step budget for a tag, including retries; it defaults
+  to `--timeout`.
+- `.concurrency` caps the number of work units running this step at once; it
+  defaults to `1`. A work unit is one verification or scan task: one tag for
+  `cosign`, one tag and platform for `wizcli`. The units of one tag can run in
+  parallel when slots allow, and `--concurrency` should not be smaller than this
+  value, because a tag waiting for a slot still holds a global one.
+- `.retries` is the number of extra attempts after an infrastructure error, per
+  work unit; it defaults to `0`. Policy denials are not retried.
 - `.onFailure` is `block` (default) or `warn`. A blocked infrastructure error
   fails the tag; `warn` records the error and continues to the copy.
+
+A step with several units combines them: any denied unit denies the tag, else
+any errored unit is an error handled by `.onFailure`, else any skipped unit
+skips the tag, and only when every unit allows does the step allow.
 
 A policy denial returns a `blocked` tag with `reason` set to the step name.
 An `allow` verdict continues to the next step. A provider may also return
@@ -321,7 +332,55 @@ artifacts:
             matchOIDCIdentity:
               - issuer: https://token.actions.githubusercontent.com
                 subject: ^https://github\.com/example/image/.*$
+        - name: vuln-scan
+          provider: wizcli
+          timeout: 10m
+          concurrency: 2
+          retries: 1
+          wizcli:
+            platforms: [linux/amd64, linux/arm64]
+            policies: [prod-vuln]
 ```
+
+##### Wiz CLI scans
+
+The `wizcli` provider scans container images with the
+[Wiz CLI](https://docs.wiz.io), which flux-mirror runs as a subprocess. The
+`wizcli` binary must be installed where flux-mirror runs; it is not part of the
+flux-mirror image. A step fails to build, before any registry work, when the
+binary or the credentials are missing.
+
+- `.wizcli.platforms` is required: the platforms to scan, each `os/arch` or
+  `os/arch/variant`, such as `linux/amd64`. Every platform is scanned on its own
+  and the tag passes only when all of them pass. The copy still mirrors the whole
+  index. A platform that is missing from a multi-arch source index is an error,
+  never skipped.
+- `.wizcli.policies` is an optional list of Wiz policy names. Without it,
+  `wizcli` evaluates every policy of the account that applies to CLI scans.
+- `.wizcli.binary` is the `wizcli` executable, `wizcli` on `PATH` by default.
+
+Credentials are never part of the config. `wizcli` authenticates with the Wiz
+service account in the `WIZ_CLIENT_ID` and `WIZ_CLIENT_SECRET` environment
+variables, and both must be set. No Wiz project is passed, so the scan applies
+to all projects associated with the service account. Results are not published
+to the Wiz portal (`--no-publish`).
+
+`wizcli` cannot read an image from a registry without a Docker daemon, so for
+each platform flux-mirror pulls the image at the digest resolved for the tag
+into a temporary tarball, scans it, and removes it. Plan for the extra pull and
+for temporary disk space (set `TMPDIR` to a volume with enough room) for
+`concurrency` tarballs at a time. The scan runs against the pinned digest that
+the copy then uses.
+
+An exit code `0` with a successful report allows the tag, and exit code `4`
+(`FAILED_BY_POLICY`) denies it, with the failed policy names in the report. Any
+other exit code is a scan error. The provider fails closed: a failed verdict in
+the report denies the tag even with exit code `0`, and a clean exit without a
+usable successful report is an error rather than an allow. `wizcli` scans OCI
+container images only. Scanning an OCI Helm chart as the source is not
+supported: the chart is not extracted or scanned as a directory, and what the
+step does with it is not defined. The destination type does not matter, because
+the scan runs on the source before the copy.
 
 ### Charts
 
@@ -892,6 +951,12 @@ first mirrored. Referrers that exist with a different digest are skipped
 | `artifacts[].verify`                 | unset      |
 | `artifacts[].hooks`                  | unset      |
 | `artifacts[].hooks.pre[].cosign.minAge` | unset     |
+| `artifacts[].hooks.pre[].timeout`    | `--timeout` |
+| `artifacts[].hooks.pre[].concurrency` | `1`       |
+| `artifacts[].hooks.pre[].retries`    | `0`        |
+| `artifacts[].hooks.pre[].onFailure`  | `block`    |
+| `artifacts[].hooks.pre[].wizcli.policies` | all CLI policies of the account |
+| `artifacts[].hooks.pre[].wizcli.binary` | `wizcli` |
 | `charts[].destinationType`           | `oci`      |
 | `charts[].selector.sortBy`           | `semver`   |
 | `charts[].selector.limit`            | `1`        |

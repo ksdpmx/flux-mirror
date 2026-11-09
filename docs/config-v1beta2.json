@@ -37,7 +37,7 @@
                   "description": "HookStep configures one pre-copy hook.",
                   "properties": {
                     "concurrency": {
-                      "description": "Concurrency caps the number of tags executing this step at once.\nDefaults to 1.",
+                      "description": "Concurrency caps the number of work units executing this step at once. A\nwork unit is one verification or scan task: a tag for cosign, one tag and\nplatform for wizcli. Defaults to 1.",
                       "type": "integer"
                     },
                     "cosign": {
@@ -92,7 +92,8 @@
                     "provider": {
                       "description": "Provider selects the hook implementation.",
                       "enum": [
-                        "cosign"
+                        "cosign",
+                        "wizcli"
                       ],
                       "type": "string"
                     },
@@ -103,6 +104,35 @@
                     "timeout": {
                       "description": "Timeout is the total time allowed for this step, including retries.\nDefaults to the sync --timeout.",
                       "type": "string"
+                    },
+                    "wizcli": {
+                      "additionalProperties": false,
+                      "description": "Wizcli configures Wiz CLI scans for this step.",
+                      "properties": {
+                        "binary": {
+                          "description": "Binary is the wizcli executable. Defaults to wizcli, resolved on PATH.",
+                          "type": "string"
+                        },
+                        "platforms": {
+                          "description": "Platforms lists the platforms to scan, each as os/arch or os/arch/variant\n(for example linux/amd64). Every platform is scanned as its own work unit;\nthe tag passes only when all of them pass. A platform missing from the\nsource image index is an error.",
+                          "items": {
+                            "type": "string"
+                          },
+                          "minItems": 1,
+                          "type": "array"
+                        },
+                        "policies": {
+                          "description": "Policies lists the Wiz policies to apply. When omitted, wizcli evaluates\nevery policy of the account that applies to CLI scans.",
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "platforms"
+                      ],
+                      "type": "object"
                     }
                   },
                   "required": [

@@ -412,6 +412,7 @@ func (m *mirror) buildHookRunner() error {
 	if builders == nil {
 		builders = map[string]hooks.Builder{
 			apiv1.HookProviderCosign: hooks.CosignBuilder(oci.NewVerifier(m.client)),
+			apiv1.HookProviderWizcli: hooks.WizcliBuilder(m.client),
 		}
 	}
 	hookRunner, err := hooks.NewRunner(*m.entry.Hooks, m.opts.HookTimeout, builders)

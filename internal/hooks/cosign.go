@@ -26,14 +26,14 @@ func CosignBuilder(verifier cosignVerifier) Builder {
 		if config.Cosign == nil {
 			return nil, fmt.Errorf("cosign configuration is required")
 		}
-		return cosignStep{
+		return StepFunc(cosignStep{
 			verifier: verifier,
 			config: apiv1.ArtifactVerification{
 				Provider:          apiv1.VerifyProviderCosign,
 				MatchOIDCIdentity: config.Cosign.MatchOIDCIdentity,
 				MinAge:            config.Cosign.MinAge,
 			},
-		}, nil
+		}.Run), nil
 	}
 }
 

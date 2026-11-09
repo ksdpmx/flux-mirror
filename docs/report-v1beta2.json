@@ -140,7 +140,7 @@
                         "description": "StepResult records the outcome of one hook step.",
                         "properties": {
                           "attempts": {
-                            "description": "Attempts is the number of times the step ran.",
+                            "description": "Attempts is the number of times the step ran, summed over its units.",
                             "minimum": 0,
                             "type": "integer"
                           },
@@ -197,6 +197,80 @@
                           "reason": {
                             "description": "Reason explains a deny or skip verdict.",
                             "type": "string"
+                          },
+                          "units": {
+                            "description": "Units lists the per-unit results (for example one per platform) when the\nstep split its work into named units. Verdict, Reason and Error above are\nthe aggregate of the units.",
+                            "items": {
+                              "additionalProperties": false,
+                              "description": "UnitResult records one named work unit of a hook step, such as the scan of\none platform.",
+                              "properties": {
+                                "attempts": {
+                                  "description": "Attempts is the number of times the unit ran.",
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "duration": {
+                                  "description": "Duration is the total unit time, including retries and waiting for a\nfree slot.",
+                                  "type": "string"
+                                },
+                                "error": {
+                                  "description": "Error carries an infrastructure error after retries.",
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "description": "Name identifies the unit, for example the platform linux/amd64.",
+                                  "type": "string"
+                                },
+                                "reason": {
+                                  "description": "Reason explains a deny or skip verdict.",
+                                  "type": "string"
+                                },
+                                "verdict": {
+                                  "description": "Verdict is the unit outcome.",
+                                  "enum": [
+                                    "allow",
+                                    "deny",
+                                    "skip",
+                                    "error"
+                                  ],
+                                  "type": "string"
+                                },
+                                "wizcli": {
+                                  "additionalProperties": false,
+                                  "description": "Wizcli carries the scan result when the provider is wizcli.",
+                                  "properties": {
+                                    "digest": {
+                                      "description": "Digest is the manifest digest of the scanned platform image.",
+                                      "type": "string"
+                                    },
+                                    "failedPolicies": {
+                                      "description": "FailedPolicies names the policies that rejected the image.",
+                                      "items": {
+                                        "type": "string"
+                                      },
+                                      "type": "array"
+                                    },
+                                    "scanId": {
+                                      "description": "ScanID is the Wiz scan identifier.",
+                                      "type": "string"
+                                    },
+                                    "verdict": {
+                                      "description": "Verdict is the Wiz scan verdict, for example PASSED_BY_POLICY or\nFAILED_BY_POLICY.",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "type": "object"
+                                }
+                              },
+                              "required": [
+                                "attempts",
+                                "duration",
+                                "name",
+                                "verdict"
+                              ],
+                              "type": "object"
+                            },
+                            "type": "array"
                           },
                           "verdict": {
                             "description": "Verdict is the step outcome.",

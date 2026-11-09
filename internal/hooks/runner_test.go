@@ -16,11 +16,7 @@ import (
 	apiv1 "github.com/fluxcd/flux-mirror/api/v1beta2"
 )
 
-type stepFunc func(context.Context, Input) (Outcome, error)
-
-func (f stepFunc) Run(ctx context.Context, input Input) (Outcome, error) {
-	return f(ctx, input)
-}
+type stepFunc = StepFunc
 
 func buildSteps(steps ...Step) map[string]Builder {
 	builders := make(map[string]Builder, len(steps))

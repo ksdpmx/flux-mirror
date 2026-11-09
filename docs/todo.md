@@ -172,6 +172,15 @@ is reverted so `verify.go` goes back to upstream (S12). (PR3) the `wizcli`
 provider and its initContainer (S1 to S10, S17). Then the chart `hooks` values,
 `charts` support, retag (B7) and prune (B8).
 
+Status: PR1, PR2 and the `wizcli` provider of PR3 are implemented in this
+repository (`internal/hooks`). Not done: the `sk8s-flux-mirror` chart and the
+initContainer that delivers the `wizcli` binary (S8, S17, outside this
+repository), `hooks` for `charts` entries, the `AUDIT`-only verdict check and a
+Linux run of the binary (S1), whether `scan dir` renders chart templates (S3),
+and a `wiz-api` provider (S7). Implemented as decided in S5: the step
+`concurrency` counts work units (`tag x platform` for `wizcli`), and
+`wizcli.platforms` is required.
+
 Goal: an ordered `hooks.pre` list on `artifacts[]` and `charts[]` whose steps
 can block a tag or version from being mirrored, like `verify` but pluggable. The
 first step type is a vulnerability and policy scan. Decisions so far:

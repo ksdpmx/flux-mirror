@@ -6,6 +6,7 @@ package hooks
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -36,6 +37,18 @@ func (v *fakeCosignVerifier) VerifyWithDiscovery(
 	return v.info, v.err
 }
 
+// runSingleUnit runs the only unit of step for input.
+func runSingleUnit(step Step, input Input) (Outcome, error) {
+	units, err := step.Units(context.Background(), input)
+	if err != nil {
+		return Outcome{}, err
+	}
+	if len(units) != 1 {
+		return Outcome{}, fmt.Errorf("got %d units, want 1", len(units))
+	}
+	return units[0].Run(context.Background())
+}
+
 func TestCosignStep_VerifiesPinnedDigest(t *testing.T) {
 	g := NewWithT(t)
 	integratedTime := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
@@ -58,7 +71,7 @@ func TestCosignStep_VerifiesPinnedDigest(t *testing.T) {
 	step, err := builder(stepConfig)
 	g.Expect(err).ToNot(HaveOccurred())
 
-	outcome, err := step.Run(context.Background(), Input{
+	outcome, err := runSingleUnit(step, Input{
 		Source: "ghcr.io/example/image", Tag: "v1", Digest: "sha256:abc",
 	})
 	g.Expect(err).ToNot(HaveOccurred())
@@ -104,7 +117,7 @@ func TestCosignStep_SkipsTooNewSignature(t *testing.T) {
 	step, err := CosignBuilder(verifier)(stepConfig)
 	g.Expect(err).ToNot(HaveOccurred())
 
-	outcome, err := step.Run(context.Background(), Input{
+	outcome, err := runSingleUnit(step, Input{
 		Source: "ghcr.io/example/image", Digest: "sha256:abc",
 	})
 	g.Expect(err).ToNot(HaveOccurred())
@@ -129,7 +142,7 @@ func TestCosignStep_MapsSignatureRejectionToDeny(t *testing.T) {
 	})
 	g.Expect(err).ToNot(HaveOccurred())
 
-	outcome, err := step.Run(context.Background(), Input{
+	outcome, err := runSingleUnit(step, Input{
 		Source: "ghcr.io/example/image", Digest: "sha256:abc",
 	})
 	g.Expect(err).ToNot(HaveOccurred())
@@ -149,7 +162,7 @@ func TestCosignStep_PropagatesInfrastructureError(t *testing.T) {
 	})
 	g.Expect(err).ToNot(HaveOccurred())
 
-	_, err = step.Run(context.Background(), Input{
+	_, err = runSingleUnit(step, Input{
 		Source: "ghcr.io/example/image", Digest: "sha256:abc",
 	})
 	g.Expect(err).To(MatchError("registry unavailable"))

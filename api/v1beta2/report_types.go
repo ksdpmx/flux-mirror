@@ -198,7 +198,7 @@ type StepResult struct {
 	// +optional
 	Error string `json:"error,omitempty"`
 
-	// Attempts is the number of times the step ran.
+	// Attempts is the number of times the step ran, summed over its units.
 	// +kubebuilder:validation:Minimum=0
 	Attempts int `json:"attempts"`
 
@@ -209,6 +209,64 @@ type StepResult struct {
 	// cosign and the signature passed.
 	// +optional
 	Cosign *Verification `json:"cosign,omitempty"`
+
+	// Units lists the per-unit results (for example one per platform) when the
+	// step split its work into named units. Verdict, Reason and Error above are
+	// the aggregate of the units.
+	// +optional
+	Units []UnitResult `json:"units,omitempty"`
+}
+
+// UnitResult records one named work unit of a hook step, such as the scan of
+// one platform.
+type UnitResult struct {
+	// Name identifies the unit, for example the platform linux/amd64.
+	Name string `json:"name"`
+
+	// Verdict is the unit outcome.
+	// +kubebuilder:validation:Enum=allow;deny;skip;error
+	Verdict StepVerdict `json:"verdict"`
+
+	// Reason explains a deny or skip verdict.
+	// +optional
+	Reason string `json:"reason,omitempty"`
+
+	// Error carries an infrastructure error after retries.
+	// +optional
+	Error string `json:"error,omitempty"`
+
+	// Attempts is the number of times the unit ran.
+	// +kubebuilder:validation:Minimum=0
+	Attempts int `json:"attempts"`
+
+	// Duration is the total unit time, including retries and waiting for a
+	// free slot.
+	Duration string `json:"duration"`
+
+	// Wizcli carries the scan result when the provider is wizcli.
+	// +optional
+	Wizcli *WizcliResult `json:"wizcli,omitempty"`
+}
+
+// WizcliResult is the part of a Wiz CLI scan result the report keeps. The
+// scan document itself is never copied: it carries the user name of the scan.
+type WizcliResult struct {
+	// Digest is the manifest digest of the scanned platform image.
+	// +optional
+	Digest string `json:"digest,omitempty"`
+
+	// ScanID is the Wiz scan identifier.
+	// +optional
+	ScanID string `json:"scanId,omitempty"`
+
+	// Verdict is the Wiz scan verdict, for example PASSED_BY_POLICY or
+	// FAILED_BY_POLICY.
+	// +optional
+	Verdict string `json:"verdict,omitempty"`
+
+	// FailedPolicies names the policies that rejected the image.
+	// +optional
+	FailedPolicies []string `json:"failedPolicies,omitempty"`
 }
 
 // StepVerdict is the result returned by a hook provider.

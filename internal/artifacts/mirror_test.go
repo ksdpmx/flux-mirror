@@ -111,11 +111,7 @@ func TestMirror_CopiesSelectedTags(t *testing.T) {
 	g.Expect(tags).To(ConsistOf("1.1.0", "1.2.0"))
 }
 
-type testHookStep func(context.Context, hooks.Input) (hooks.Outcome, error)
-
-func (f testHookStep) Run(ctx context.Context, input hooks.Input) (hooks.Outcome, error) {
-	return f(ctx, input)
-}
+type testHookStep = hooks.StepFunc
 
 func testHookEntry(src, dst string) apiv1.ArtifactEntry {
 	return apiv1.ArtifactEntry{

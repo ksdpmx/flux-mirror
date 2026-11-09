@@ -595,9 +595,6 @@ func validateArtifactHooks(hooks apiv1.ArtifactHooks) error {
 			return fmt.Errorf("pre[%d].name %q is duplicated", i, step.Name)
 		}
 		seen[step.Name] = struct{}{}
-		if step.Provider != apiv1.HookProviderCosign {
-			return fmt.Errorf("pre[%d].provider %q must be %q", i, step.Provider, apiv1.HookProviderCosign)
-		}
 		if step.Timeout != nil && step.Timeout.Duration <= 0 {
 			return fmt.Errorf("pre[%d].timeout must be greater than 0", i)
 		}
@@ -613,8 +610,23 @@ func validateArtifactHooks(hooks apiv1.ArtifactHooks) error {
 			return fmt.Errorf("pre[%d].onFailure %q must be %q or %q",
 				i, step.OnFailure, apiv1.HookFailureBlock, apiv1.HookFailureWarn)
 		}
+		if err := validateHookProvider(step); err != nil {
+			return fmt.Errorf("pre[%d]: %w", i, err)
+		}
+	}
+	return nil
+}
+
+// validateHookProvider requires exactly the configuration block that matches
+// the provider, so a misplaced block is rejected instead of silently ignored.
+func validateHookProvider(step apiv1.HookStep) error {
+	switch step.Provider {
+	case apiv1.HookProviderCosign:
+		if step.Wizcli != nil {
+			return fmt.Errorf("wizcli cannot be set for provider %q", step.Provider)
+		}
 		if step.Cosign == nil {
-			return fmt.Errorf("pre[%d].cosign is required for provider %q", i, step.Provider)
+			return fmt.Errorf("cosign is required for provider %q", step.Provider)
 		}
 		verification := apiv1.ArtifactVerification{
 			Provider:          apiv1.VerifyProviderCosign,
@@ -622,7 +634,43 @@ func validateArtifactHooks(hooks apiv1.ArtifactHooks) error {
 			MinAge:            step.Cosign.MinAge,
 		}
 		if err := validateVerification(verification); err != nil {
-			return fmt.Errorf("pre[%d].cosign: %w", i, err)
+			return fmt.Errorf("cosign: %w", err)
+		}
+	case apiv1.HookProviderWizcli:
+		if step.Cosign != nil {
+			return fmt.Errorf("cosign cannot be set for provider %q", step.Provider)
+		}
+		if step.Wizcli == nil {
+			return fmt.Errorf("wizcli is required for provider %q", step.Provider)
+		}
+		if err := validateWizcliHook(*step.Wizcli); err != nil {
+			return fmt.Errorf("wizcli: %w", err)
+		}
+	default:
+		return fmt.Errorf("provider %q must be %q or %q", step.Provider, apiv1.HookProviderCosign, apiv1.HookProviderWizcli)
+	}
+	return nil
+}
+
+var hookPlatformPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?$`)
+
+func validateWizcliHook(c apiv1.WizcliHookConfig) error {
+	if len(c.Platforms) == 0 {
+		return fmt.Errorf("platforms must contain at least one platform")
+	}
+	seen := make(map[string]struct{}, len(c.Platforms))
+	for i, platform := range c.Platforms {
+		if !hookPlatformPattern.MatchString(platform) {
+			return fmt.Errorf("platforms[%d] %q must be os/arch or os/arch/variant", i, platform)
+		}
+		if _, ok := seen[platform]; ok {
+			return fmt.Errorf("platforms[%d] %q is duplicated", i, platform)
+		}
+		seen[platform] = struct{}{}
+	}
+	for i, policy := range c.Policies {
+		if strings.TrimSpace(policy) == "" {
+			return fmt.Errorf("policies[%d] must not be empty", i)
 		}
 	}
 	return nil
