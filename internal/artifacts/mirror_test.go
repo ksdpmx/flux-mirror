@@ -215,6 +215,45 @@ func TestMirror_HookAllowCopiesAndReportsStep(t *testing.T) {
 	g.Expect(cmp.State).To(Equal(oci.StateEqual))
 }
 
+func TestMirror_HookSkipDoesNotCopy(t *testing.T) {
+	g := NewWithT(t)
+	src := repo("hook-skip-verdict-src")
+	dst := repo("hook-skip-verdict-dst")
+	testregistry.PushImage(t, src+":1.0.0")
+	c := oci.NewClient(oci.Insecure())
+	entry := testHookEntry(src, dst)
+	mirror := New(c, entry, Options{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		HookBuilders: map[string]hooks.Builder{
+			apiv1.HookProviderCosign: func(apiv1.HookStep) (hooks.Step, error) {
+				return testHookStep(func(context.Context, hooks.Input) (hooks.Outcome, error) {
+					return hooks.Outcome{
+						Verdict: apiv1.StepVerdictSkip,
+						Reason:  apiv1.ReasonSignatureTooNew,
+						Cosign: &apiv1.Verification{
+							Provider: apiv1.VerifyProviderCosign,
+							Age:      "30m0s",
+							MinAge:   "1h0m0s",
+						},
+					}, nil
+				}), nil
+			},
+		},
+	})
+	res, err := newRunner().Run(context.Background(), []sync.EntryMirror{mirror})
+	g.Expect(err).ToNot(HaveOccurred())
+	row := res.Entries[0].Tags[0]
+	g.Expect(row.Status).To(Equal(apiv1.StatusSkipped))
+	g.Expect(row.Reason).To(Equal(apiv1.ReasonSignatureTooNew))
+	g.Expect(row.Steps).To(HaveLen(1))
+	g.Expect(row.Steps[0].Verdict).To(Equal(apiv1.StepVerdictSkip))
+	g.Expect(row.Steps[0].Cosign.Age).To(Equal("30m0s"))
+
+	cmp, err := c.Compare(context.Background(), src+":1.0.0", dst+":1.0.0")
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(cmp.State).To(Equal(oci.StateMissing))
+}
+
 func TestMirror_HooksSkipUpToDateAndDryRunTags(t *testing.T) {
 	for _, tt := range []struct {
 		name       string

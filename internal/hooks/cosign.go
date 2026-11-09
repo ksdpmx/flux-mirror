@@ -14,10 +14,10 @@ import (
 )
 
 type cosignVerifier interface {
-	VerifyReferrers(context.Context, string, apiv1.ArtifactVerification) (*oci.VerificationInfo, error)
+	VerifyWithDiscovery(context.Context, string, apiv1.ArtifactVerification, oci.SignatureDiscoverer) (*oci.VerificationInfo, error)
 }
 
-// CosignBuilder creates the referrer-only cosign provider.
+// CosignBuilder creates the cosign signature verification provider.
 func CosignBuilder(verifier cosignVerifier) Builder {
 	return func(config apiv1.HookStep) (Step, error) {
 		if verifier == nil {
@@ -31,6 +31,7 @@ func CosignBuilder(verifier cosignVerifier) Builder {
 			config: apiv1.ArtifactVerification{
 				Provider:          apiv1.VerifyProviderCosign,
 				MatchOIDCIdentity: config.Cosign.MatchOIDCIdentity,
+				MinAge:            config.Cosign.MinAge,
 			},
 		}, nil
 	}
@@ -43,8 +44,19 @@ type cosignStep struct {
 
 func (s cosignStep) Run(ctx context.Context, input Input) (Outcome, error) {
 	ref := input.Source + "@" + input.Digest
-	info, err := s.verifier.VerifyReferrers(ctx, ref, s.config)
+	info, err := s.verifier.VerifyWithDiscovery(ctx, ref, s.config, discoverCosignBundle)
 	if err != nil {
+		var tooNew *oci.SignatureTooNewError
+		if errors.As(err, &tooNew) {
+			if info == nil {
+				return Outcome{}, fmt.Errorf("cosign verifier returned no metadata for a too-new signature")
+			}
+			return Outcome{
+				Verdict: apiv1.StepVerdictSkip,
+				Reason:  apiv1.ReasonSignatureTooNew,
+				Cosign:  cosignVerification(info, tooNew),
+			}, nil
+		}
 		var rejected *oci.SignatureRejectedError
 		if errors.As(err, &rejected) {
 			return Outcome{
@@ -61,6 +73,13 @@ func (s cosignStep) Run(ctx context.Context, input Input) (Outcome, error) {
 		return Outcome{}, fmt.Errorf("cosign verifier returned digest %q, want %q", info.Digest, input.Digest)
 	}
 
+	return Outcome{
+		Verdict: apiv1.StepVerdictAllow,
+		Cosign:  cosignVerification(info, nil),
+	}, nil
+}
+
+func cosignVerification(info *oci.VerificationInfo, tooNew *oci.SignatureTooNewError) *apiv1.Verification {
 	verification := &apiv1.Verification{
 		Provider: apiv1.VerifyProviderCosign,
 		Issuer:   info.Issuer,
@@ -69,8 +88,9 @@ func (s cosignStep) Run(ctx context.Context, input Input) (Outcome, error) {
 	if !info.IntegratedTime.IsZero() {
 		verification.IntegratedTime = info.IntegratedTime.UTC().Format(time.RFC3339)
 	}
-	return Outcome{
-		Verdict: apiv1.StepVerdictAllow,
-		Cosign:  verification,
-	}, nil
+	if tooNew != nil {
+		verification.Age = tooNew.Age.Round(time.Second).String()
+		verification.MinAge = tooNew.MinAge.String()
+	}
+	return verification
 }

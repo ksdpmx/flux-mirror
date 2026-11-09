@@ -278,15 +278,19 @@ artifacts:
 `.artifacts[].hooks.pre` is an optional ordered list of checks that run after
 the source/destination comparison and before copying a tag. The first release
 supports the `cosign` provider, which verifies keyless signatures discovered
-through the OCI 1.1 referrers API. It does not discover legacy
-`sha256-<digest>.sig` tags. Hooks are not run for up-to-date or drifted tags, or
-under `--dry-run`; `charts[]` does not support hooks yet.
+through the OCI 1.1 referrers API, falling back to cosign's legacy
+`sha256-<digest>.sig` tag discovery when no referrer bundle is present. Hooks
+are not run for up-to-date or drifted tags, or under `--dry-run`; `charts[]`
+does not support hooks yet.
 
 Each step has a unique lowercase `.name`, a `.provider`, and a provider-specific
 configuration block named after that provider. `cosign.matchOIDCIdentity`
 uses the same issuer and subject-regexp rules as [`verify`](#signature-verification).
-An entry cannot combine `verify:` and `hooks.pre`, because that would verify
-each tag twice.
+`cosign.minAge` is an optional duration that defers valid signatures until
+their verified Rekor integrated time is old enough; too-new signatures yield
+`skipped` with reason `signature-too-new`. A signature without a verified Tlog
+timestamp fails when `minAge` is configured. An entry cannot combine `verify:`
+and `hooks.pre`, because that would verify each tag twice.
 
 Common step controls are optional:
 
@@ -313,6 +317,7 @@ artifacts:
         - name: signature
           provider: cosign
           cosign:
+            minAge: 12h
             matchOIDCIdentity:
               - issuer: https://token.actions.githubusercontent.com
                 subject: ^https://github\.com/example/image/.*$
@@ -886,6 +891,7 @@ first mirrored. Referrers that exist with a different digest are skipped
 | `artifacts[].destinationType`        | `oci`      |
 | `artifacts[].verify`                 | unset      |
 | `artifacts[].hooks`                  | unset      |
+| `artifacts[].hooks.pre[].cosign.minAge` | unset     |
 | `charts[].destinationType`           | `oci`      |
 | `charts[].selector.sortBy`           | `semver`   |
 | `charts[].selector.limit`            | `1`        |

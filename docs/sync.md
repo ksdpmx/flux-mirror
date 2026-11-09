@@ -181,7 +181,7 @@ Each tag row (and each referrer row) lands in exactly one of these statuses:
 
 A `skipped` row's `reason` is either `up-to-date` (the destination already has
 the same digest) or `signature-too-new` (a valid signature deferred by
-`verify.minAge`).
+`verify.minAge` or a cosign hook's `minAge`).
 
 A failed signature verification (bad/missing signature, OIDC mismatch) is
 recorded as a `failed` tag row carrying the verify error; verification runs at

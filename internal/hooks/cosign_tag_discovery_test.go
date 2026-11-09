@@ -1,7 +1,7 @@
 // Copyright 2026 The Flux Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package oci
+package hooks
 
 import (
 	"crypto/ecdsa"

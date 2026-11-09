@@ -66,6 +66,10 @@
                             "type": "object"
                           },
                           "type": "array"
+                        },
+                        "minAge": {
+                          "description": "MinAge requires a signature to be at least this old before mirroring.",
+                          "type": "string"
                         }
                       },
                       "required": [

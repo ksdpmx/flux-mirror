@@ -619,6 +619,7 @@ func validateArtifactHooks(hooks apiv1.ArtifactHooks) error {
 		verification := apiv1.ArtifactVerification{
 			Provider:          apiv1.VerifyProviderCosign,
 			MatchOIDCIdentity: step.Cosign.MatchOIDCIdentity,
+			MinAge:            step.Cosign.MinAge,
 		}
 		if err := validateVerification(verification); err != nil {
 			return fmt.Errorf("pre[%d].cosign: %w", i, err)

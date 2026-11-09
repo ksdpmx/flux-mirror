@@ -10,21 +10,29 @@ import (
 	"time"
 
 	. "github.com/onsi/gomega"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	apiv1 "github.com/fluxcd/flux-mirror/api/v1beta2"
 	"github.com/fluxcd/flux-mirror/internal/oci"
 )
 
 type fakeCosignVerifier struct {
-	ref  string
-	cfg  apiv1.ArtifactVerification
-	info *oci.VerificationInfo
-	err  error
+	ref      string
+	cfg      apiv1.ArtifactVerification
+	info     *oci.VerificationInfo
+	err      error
+	discover oci.SignatureDiscoverer
 }
 
-func (v *fakeCosignVerifier) VerifyReferrers(_ context.Context, ref string, cfg apiv1.ArtifactVerification) (*oci.VerificationInfo, error) {
+func (v *fakeCosignVerifier) VerifyWithDiscovery(
+	_ context.Context,
+	ref string,
+	cfg apiv1.ArtifactVerification,
+	discover oci.SignatureDiscoverer,
+) (*oci.VerificationInfo, error) {
 	v.ref = ref
 	v.cfg = cfg
+	v.discover = discover
 	return v.info, v.err
 }
 
@@ -55,6 +63,7 @@ func TestCosignStep_VerifiesPinnedDigest(t *testing.T) {
 	})
 	g.Expect(err).ToNot(HaveOccurred())
 	g.Expect(verifier.ref).To(Equal("ghcr.io/example/image@sha256:abc"))
+	g.Expect(verifier.discover).ToNot(BeNil())
 	g.Expect(verifier.cfg.Provider).To(Equal(apiv1.VerifyProviderCosign))
 	g.Expect(verifier.cfg.MatchOIDCIdentity).To(Equal(stepConfig.Cosign.MatchOIDCIdentity))
 	g.Expect(outcome.Verdict).To(Equal(apiv1.StepVerdictAllow))
@@ -64,6 +73,46 @@ func TestCosignStep_VerifiesPinnedDigest(t *testing.T) {
 		Identity:       verifier.info.Identity,
 		IntegratedTime: integratedTime.Format(time.RFC3339),
 	}))
+}
+
+func TestCosignStep_SkipsTooNewSignature(t *testing.T) {
+	g := NewWithT(t)
+	integratedTime := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	minAge := time.Hour
+	verifier := &fakeCosignVerifier{
+		info: &oci.VerificationInfo{
+			Provider:       apiv1.VerifyProviderCosign,
+			Digest:         "sha256:abc",
+			Issuer:         "issuer",
+			Identity:       "identity",
+			IntegratedTime: integratedTime,
+		},
+		err: &oci.SignatureTooNewError{
+			IntegratedTime: integratedTime,
+			Age:            30 * time.Minute,
+			MinAge:         minAge,
+		},
+	}
+	stepConfig := apiv1.HookStep{
+		Name:     "signature",
+		Provider: apiv1.HookProviderCosign,
+		Cosign: &apiv1.CosignHookConfig{
+			MatchOIDCIdentity: []apiv1.OIDCIdentity{{Issuer: "issuer", Subject: "subject"}},
+			MinAge:            &metav1.Duration{Duration: minAge},
+		},
+	}
+	step, err := CosignBuilder(verifier)(stepConfig)
+	g.Expect(err).ToNot(HaveOccurred())
+
+	outcome, err := step.Run(context.Background(), Input{
+		Source: "ghcr.io/example/image", Digest: "sha256:abc",
+	})
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(verifier.cfg.MinAge.Duration).To(Equal(minAge))
+	g.Expect(outcome.Verdict).To(Equal(apiv1.StepVerdictSkip))
+	g.Expect(outcome.Reason).To(Equal(apiv1.ReasonSignatureTooNew))
+	g.Expect(outcome.Cosign.Age).To(Equal("30m0s"))
+	g.Expect(outcome.Cosign.MinAge).To(Equal("1h0m0s"))
 }
 
 func TestCosignStep_MapsSignatureRejectionToDeny(t *testing.T) {

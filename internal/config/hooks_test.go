@@ -112,6 +112,17 @@ func TestValidateArtifactHooks(t *testing.T) {
 			},
 			err: "does not compile",
 		},
+		{
+			name: "negative minAge",
+			step: apiv1.HookStep{
+				Name: "signature", Provider: apiv1.HookProviderCosign,
+				Cosign: &apiv1.CosignHookConfig{
+					MatchOIDCIdentity: []apiv1.OIDCIdentity{{Issuer: "issuer", Subject: "subject"}},
+					MinAge:            &metav1.Duration{Duration: -time.Second},
+				},
+			},
+			err: "minAge must be >= 0",
+		},
 	}
 
 	for _, tt := range tests {
@@ -151,6 +162,7 @@ func TestValidateArtifactHooks(t *testing.T) {
 		step.Concurrency = &positive
 		step.Retries = &zero
 		step.OnFailure = apiv1.HookFailureWarn
+		step.Cosign.MinAge = &metav1.Duration{Duration: time.Hour}
 		g.Expect(validateArtifactHooks(apiv1.ArtifactHooks{Pre: []apiv1.HookStep{step}})).To(Succeed())
 	})
 }
@@ -169,6 +181,7 @@ artifacts:
         - name: signature
           provider: cosign
           cosign:
+            minAge: 12h
             matchOIDCIdentity:
               - issuer: https://token.actions.githubusercontent.com
                 subject: ^https://github\.com/example/image/.*$
@@ -177,6 +190,7 @@ artifacts:
 	g.Expect(err).ToNot(HaveOccurred())
 	g.Expect(Validate(cfg)).To(Succeed())
 	g.Expect(cfg.Artifacts[0].Hooks.Pre).To(HaveLen(1))
+	g.Expect(cfg.Artifacts[0].Hooks.Pre[0].Cosign.MinAge.Duration).To(Equal(12 * time.Hour))
 
 	t.Run("unknown provider config field is rejected", func(t *testing.T) {
 		g := NewWithT(t)

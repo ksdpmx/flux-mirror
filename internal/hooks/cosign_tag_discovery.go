@@ -1,7 +1,7 @@
 // Copyright 2026 The Flux Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package oci
+package hooks
 
 import (
 	"bytes"
@@ -23,6 +23,8 @@ import (
 	protocommon "github.com/sigstore/protobuf-specs/gen/pb-go/common/v1"
 	protorekor "github.com/sigstore/protobuf-specs/gen/pb-go/rekor/v1"
 	"github.com/sigstore/sigstore-go/pkg/bundle"
+
+	"github.com/fluxcd/flux-mirror/internal/oci"
 )
 
 const (
@@ -112,7 +114,7 @@ func findCosignTagBundle(repo name.Repository, digest v1.Hash, opts ...remote.Op
 	}
 	manifest, err := v1.ParseManifest(bytes.NewReader(desc.Manifest))
 	if err != nil {
-		return nil, nil, fmt.Errorf("parse cosign signature manifest %s: %w", tagRef, err)
+		return nil, nil, oci.NewSignatureRejectedError(fmt.Errorf("parse cosign signature manifest %s: %w", tagRef, err))
 	}
 
 	for _, layer := range manifest.Layers {
@@ -134,34 +136,34 @@ func buildCosignTagBundle(repo name.Repository, digest v1.Hash, layer v1.Descrip
 
 	var simpleSigning cosignTagSimpleSigningPayload
 	if err := json.Unmarshal(payload, &simpleSigning); err != nil {
-		return nil, nil, fmt.Errorf("parse cosign tag signature payload: %w", err)
+		return nil, nil, oci.NewSignatureRejectedError(fmt.Errorf("parse cosign tag signature payload: %w", err))
 	}
 	if simpleSigning.Critical.Image.DockerManifestDigest != digest.String() {
-		return nil, nil, fmt.Errorf("cosign tag signature payload digest %q does not match %q",
-			simpleSigning.Critical.Image.DockerManifestDigest, digest.String())
+		return nil, nil, oci.NewSignatureRejectedError(fmt.Errorf("cosign tag signature payload digest %q does not match %q",
+			simpleSigning.Critical.Image.DockerManifestDigest, digest.String()))
 	}
 
 	sigB64, ok := layer.Annotations[cosignTagAnnotationSignature]
 	if !ok {
-		return nil, nil, fmt.Errorf("cosign tag signature is missing the %q annotation", cosignTagAnnotationSignature)
+		return nil, nil, oci.NewSignatureRejectedError(fmt.Errorf("cosign tag signature is missing the %q annotation", cosignTagAnnotationSignature))
 	}
 	signature, err := base64.StdEncoding.DecodeString(sigB64)
 	if err != nil {
-		return nil, nil, fmt.Errorf("decode cosign tag signature: %w", err)
+		return nil, nil, oci.NewSignatureRejectedError(fmt.Errorf("decode cosign tag signature: %w", err))
 	}
 
 	certPEM, ok := layer.Annotations[cosignTagAnnotationCertificate]
 	if !ok {
-		return nil, nil, fmt.Errorf("cosign tag signature has no certificate; key-based signatures are not supported")
+		return nil, nil, oci.NewSignatureRejectedError(fmt.Errorf("cosign tag signature has no certificate; key-based signatures are not supported"))
 	}
 	certs, err := decodeCosignTagCertificateChain(certPEM, layer.Annotations[cosignTagAnnotationChain])
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, oci.NewSignatureRejectedError(err)
 	}
 
 	tlogEntries, err := decodeCosignTagTlogEntries(layer.Annotations[cosignTagAnnotationBundle])
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, oci.NewSignatureRejectedError(err)
 	}
 
 	digestSum := sha256.Sum256(payload)
@@ -190,7 +192,7 @@ func buildCosignTagBundle(repo name.Repository, digest v1.Hash, layer v1.Descrip
 
 	b, err := bundle.NewBundle(pb)
 	if err != nil {
-		return nil, nil, fmt.Errorf("build sigstore bundle from cosign tag signature: %w", err)
+		return nil, nil, oci.NewSignatureRejectedError(fmt.Errorf("build sigstore bundle from cosign tag signature: %w", err))
 	}
 	return b, payload, nil
 }

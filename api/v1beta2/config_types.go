@@ -608,6 +608,10 @@ type HookStep struct {
 type CosignHookConfig struct {
 	// MatchOIDCIdentity lists the Fulcio certificate identities to accept.
 	MatchOIDCIdentity []OIDCIdentity `json:"matchOIDCIdentity"`
+
+	// MinAge requires a signature to be at least this old before mirroring.
+	// +optional
+	MinAge *metav1.Duration `json:"minAge,omitempty"`
 }
 
 // OIDCIdentity matches a Fulcio certificate identity.

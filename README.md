@@ -31,7 +31,7 @@ on upstream chart repositories.
 - **Cosign verification** — opt-in keyless signature verification for selected
   source artifacts before they are mirrored, with optional minimum signature age.
 - **Pre-copy gates** — ordered per-tag hooks for OCI artifacts; the initial
-  `cosign` provider checks keyless signatures published as OCI referrers.
+  `cosign` provider checks keyless signatures via OCI referrers or legacy tags.
 - **Selector pipeline** — the same four-step `regex → semver → sort → top-N`
   filter for OCI artifacts and Helm charts. Sort by `semver`, `alphabetical`, or
   `numerical`.

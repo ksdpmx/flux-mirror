@@ -49,7 +49,7 @@ stable key set.
 | `entries`        | Number of config entries processed.                                                          |
 | `copied`         | Total tags copied across all entries.                                                        |
 | `overwritten`    | Total tags overwritten (drift with `overwrite: true`).                                       |
-| `skipped`        | Total tags skipped (already up to date, or deferred by `verify.minAge`).                     |
+| `skipped`        | Total tags skipped (already up to date, or deferred by `verify.minAge` or a hook's `minAge`). |
 | `drifted`        | Total tags drifted (different digest, `overwrite: false`), including entries with `ignoreDriftForExitCode: true`. |
 | `wouldCopy`      | Dry-run forecast: tags that would have been copied.                                          |
 | `wouldOverwrite` | Dry-run forecast: tags that would have been overwritten.                                     |
@@ -112,7 +112,7 @@ For a `blocked` tag, `reason` is the hook step name.
 | Reason              | Meaning                                                                       |
 |---------------------|-------------------------------------------------------------------------------|
 | `up-to-date`        | Destination already has the same digest.                                      |
-| `signature-too-new` | A valid signature was deferred because it is younger than `verify.minAge`.    |
+| `signature-too-new` | A valid signature was deferred because it is younger than `verify.minAge` or a cosign hook's `minAge`. |
 
 ## Referrer fields
 
@@ -133,8 +133,9 @@ with `would-copy` / `would-overwrite` / `skipped` statuses.
 
 ## Verification fields
 
-Present only when a signature was confirmed (the entry has a `verify:` block). Only
-`provider` is guaranteed; the rest is best-effort.
+The top-level `verification` field appears when a signature was confirmed by
+`verify:`. The `cosign` object under `steps[]` uses the same fields for hook
+verification. Only `provider` is guaranteed; the rest is best-effort.
 
 | Key              | Description                                                                                          |
 |------------------|------------------------------------------------------------------------------------------------------|
@@ -143,7 +144,7 @@ Present only when a signature was confirmed (the entry has a `verify:` block). O
 | `identity`       | Matched certificate identity (subject alternative name).                                             |
 | `integratedTime` | Transparency-log integration time (RFC 3339). Present only when the bundle carries a Tlog timestamp. |
 | `age`            | Signature age, as a Go duration string. Present only on a `signature-too-new` skip.                  |
-| `minAge`         | Configured `verify.minAge`, as a Go duration string. Present only on a `signature-too-new` skip.     |
+| `minAge`         | Configured `verify.minAge` or `hooks.pre[].cosign.minAge`. Present only on a `signature-too-new` skip. |
 
 ## Hook step fields
 
@@ -154,7 +155,9 @@ infrastructure retries. A cosign step includes its confirmed signature
 metadata in the typed `cosign` object. A denied tag has `status: "blocked"` and
 its tag-level `reason` is the step name; provider details remain in `steps[]`.
 Errors with `onFailure: block` produce a failed tag, while `onFailure: warn`
-records the error and lets mirroring continue.
+records the error and lets mirroring continue. A too-new cosign signature is a
+`skip` verdict with reason `signature-too-new`; `cosign.age` and
+`cosign.minAge` record the measured and required ages.
 
 | Key        | Description                                                        |
 |------------|--------------------------------------------------------------------|

@@ -352,12 +352,44 @@ scans a directory; both accept `--policies`, `--projects`, `--timeout`,
   - A passing scan (`alpine:latest`) has `failedPolicyMatches: null`, no
     `endOfLifeTechnologies`, and all `analytics` counts 0. Fields are `null` when
     empty, not empty lists, so a parser must tolerate `null`.
-  - Still to check: the process exit code for a policy failure and for a pass, an
-    `AUDIT` hit, a scan error versus a policy failure, and a Helm chart with
-    `scan dir` (S3).
+  - Process exit codes (wizcli 1.83.0, cached device-code session, tar input,
+    `--no-publish --json-output-file`, 2026-11-09): pass `0`
+    (`PASSED_BY_POLICY`); policy failure `4` (`FAILED_BY_POLICY`, `alpine:3.20`
+    on the "Block End of Life" policy); every scan error `1`: missing input
+    file, failed authentication (fake client id and secret), and `--timeout 1s`
+    (`failed to initiate scan: context deadline exceeded`). So the provider
+    maps `0` to allow, `4` to deny and anything else to an error (retryable),
+    and reads the verdict from the JSON file as the source of truth.
+  - Use `--json-output-file`, not `--stdout json`: a failing scan still writes
+    the file, and the human status lines never mix with it.
+  - JSON fields to keep: `status.state`, `status.verdict`, `id`,
+    `policies[].name` (evaluated), and for a failure
+    `result.failedPolicyMatches[].policy.name` plus
+    `policy.policyLifecycleEnforcements[]` (`enforcementMethod` `BLOCK`,
+    `deploymentLifecycle` `CLI`). `projects` and `outputMessages` are `null`.
+    `createdBy` carries the user name: never copy it into the report.
+  - `--projects` unset: the scan applies to all Projects associated with the
+    authenticated service account (from `wizcli scan container-image --help`);
+    the JSON has `projects: null`. The first version passes no `--projects`.
+  - `--by-policy-hits` (default `BLOCK`, values `AUDIT`, `DISABLED`, `BLOCK`)
+    only filters which results are displayed; it is not a verdict switch.
+    Do not rely on it.
+  - A Helm chart directory (`wizcli scan dir <extracted chart>`) scans fine and
+    exits `0`: the IaC scanner runs (`filesParsed` 2, `queriesExecuted` 4 on
+    the podinfo test chart), with no findings. Whether templates are rendered
+    before scanning is still not proven; it needs a chart with a deliberate
+    misconfiguration in a template (S3).
+  - Still to check: the exit code and verdict for an `AUDIT`-only policy hit (no
+    account policy produced one here), a Linux/alpine run of the Linux binary,
+    the egress domains it needs, and memory on large images.
 - **S2. Scan input for images.** Preferred: save the image to a tar (crane) so
   neither a docker daemon nor registry credentials for wizcli are needed, at the
-  cost of an extra pull. Multi-arch: scan one platform or all (undecided).
+  cost of an extra pull. Multi-arch (decided): `wizcli.platforms` is a list; each
+  listed platform is pulled (`crane pull --platform`) and scanned as its own
+  scan task. A platform missing from the source index is an error, never a
+  silent skip. The copy still mirrors the whole index. No `projects` field in
+  the first version: `wizcli` runs with its default project behavior (what that
+  default means is still to be checked in S1).
   Optional cheaper input: `wizcli scan dir <dir> --scan-sbom` (also on
   `scan container-image`) scans SBOM files in the target, so an SBOM found as an
   OCI referrer of the source image could be scanned without pulling the image.
@@ -392,6 +424,22 @@ scans a directory; both accept `--policies`, `--projects`, `--timeout`,
   property of a digest; an extracted SBOM is). Start with A and C. Keep the code in `internal/hooks`
   (a generic step interface with the verdicts from S12; the `wizcli` provider
   runs a subprocess).
+  - Concurrency unit (decided): a step's `concurrency` counts work units, not
+    tags. A unit is one scan or verification task: for `wizcli` one
+    `tag x platform` scan, for `cosign` one tag now and later one
+    `tag x platform` verification (V1). The step limit therefore caps the real
+    number of concurrent `wizcli` processes, which is what bounds CPU, memory,
+    tar disk use and API rate. The units of one tag may run in parallel when
+    slots allow. Aggregation per tag: every unit allows -> allow; any unit denies
+    -> `deny` (the tag is `blocked`); no deny but any unit errors after its
+    retries -> the step errors and `onFailure` decides. `retries` and the
+    semaphore apply per unit, and the step `timeout` still bounds the whole step
+    for the tag. This changes the PR1 interface: `Step` can no longer be a
+    single `Run(ctx, Input)` guarded by one semaphore in the runner; a step
+    returns its units for a tag and the runner executes them under the step
+    semaphore (provider code must not hold a slot while waiting for another).
+    `StepResult` then needs per-unit results (for example a `platform` field), to
+    be designed with PR3.
   - Per-step limits: each step has its own `timeout` and `concurrency`, which
     apply to that step only (a semaphore per step; the runner handles one entry at
     a time, so within a run this is also that step's global cap). Defaults:
@@ -522,7 +570,9 @@ scans a directory; both accept `--policies`, `--projects`, `--timeout`,
     accepted, neither a patch nor a copy has to be maintained.
   - Setting both `verify` and a `cosign` step on one entry verifies twice;
     reject it or warn.
-  - V1 and V2 then become extra `cosign` steps.
+  - V1 and V2 then become extra `cosign` steps. Per-platform verification (V1)
+    will be one work unit per `tag x platform`, counted by the step
+    `concurrency` like `wizcli` scans (see S5).
 
 - **S13. `hooks.post` design (not planned yet).** Same ordered-list shape and
   step interface as `hooks.pre`, run after the copy. Open points:
