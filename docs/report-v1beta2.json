@@ -64,7 +64,7 @@
                 "description": "Tags lists the per-tag results.",
                 "items": {
                   "additionalProperties": false,
-                  "description": "TagResult is one tag's row in the report. Optional fields follow the wire\ncontract: digest when resolved; reason only on skipped; error only on\nfailed; referrers only when includeReferrers surfaced any; verification only\nwhen a signature was confirmed.",
+                  "description": "TagResult is one tag's row in the report. Optional fields follow the wire\ncontract: digest when resolved; reason on skipped or blocked; error only on\nfailed; referrers only when includeReferrers surfaced any; verification only\nwhen a signature was confirmed; steps only when hooks ran.",
                   "properties": {
                     "digest": {
                       "description": "Digest is the resolved source artifact digest.",
@@ -75,7 +75,7 @@
                       "type": "string"
                     },
                     "reason": {
-                      "description": "Reason explains a skip (up-to-date or signature-too-new).",
+                      "description": "Reason explains a skip or names the hook that blocked the tag.",
                       "type": "string"
                     },
                     "referrers": {
@@ -105,6 +105,7 @@
                               "drifted",
                               "would-copy",
                               "would-overwrite",
+                              "blocked",
                               "failed"
                             ],
                             "type": "string"
@@ -127,9 +128,97 @@
                         "drifted",
                         "would-copy",
                         "would-overwrite",
+                        "blocked",
                         "failed"
                       ],
                       "type": "string"
+                    },
+                    "steps": {
+                      "description": "Steps lists the hook steps that ran for this tag, in execution order.",
+                      "items": {
+                        "additionalProperties": false,
+                        "description": "StepResult records the outcome of one hook step.",
+                        "properties": {
+                          "attempts": {
+                            "description": "Attempts is the number of times the step ran.",
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "cosign": {
+                            "additionalProperties": false,
+                            "description": "Cosign carries the verified signature metadata when the provider is\ncosign and the signature passed.",
+                            "properties": {
+                              "age": {
+                                "description": "Age is the signature age on the signature-too-new skip.",
+                                "type": "string"
+                              },
+                              "identity": {
+                                "description": "Identity is the recovered keyless certificate identity.",
+                                "type": "string"
+                              },
+                              "integratedTime": {
+                                "description": "IntegratedTime is the verified transparency-log timestamp.",
+                                "type": "string"
+                              },
+                              "issuer": {
+                                "description": "Issuer is the recovered keyless certificate issuer.",
+                                "type": "string"
+                              },
+                              "minAge": {
+                                "description": "MinAge is the configured minimum age on the signature-too-new skip.",
+                                "type": "string"
+                              },
+                              "provider": {
+                                "description": "Provider is the verification provider (VerifyProviderCosign).",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "provider"
+                            ],
+                            "type": "object"
+                          },
+                          "duration": {
+                            "description": "Duration is the total step time, including retries.",
+                            "type": "string"
+                          },
+                          "error": {
+                            "description": "Error carries an infrastructure error after retries.",
+                            "type": "string"
+                          },
+                          "name": {
+                            "description": "Name is the configured step name.",
+                            "type": "string"
+                          },
+                          "provider": {
+                            "description": "Provider identifies the hook implementation.",
+                            "type": "string"
+                          },
+                          "reason": {
+                            "description": "Reason explains a deny or skip verdict.",
+                            "type": "string"
+                          },
+                          "verdict": {
+                            "description": "Verdict is the step outcome.",
+                            "enum": [
+                              "allow",
+                              "deny",
+                              "skip",
+                              "error"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "attempts",
+                          "duration",
+                          "name",
+                          "provider",
+                          "verdict"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
                     },
                     "tag": {
                       "description": "Tag is the tag name.",
@@ -193,6 +282,11 @@
           "additionalProperties": false,
           "description": "Summary contains aggregate per-outcome tag counts.",
           "properties": {
+            "blocked": {
+              "description": "Blocked is the number of tags rejected by a hook policy.",
+              "minimum": 0,
+              "type": "integer"
+            },
             "copied": {
               "description": "Copied is the number of tags copied.",
               "minimum": 0,
@@ -209,7 +303,7 @@
               "type": "integer"
             },
             "exitCode": {
-              "description": "ExitCode is the semantic sync exit code (0 clean, 1 failures, 2 drift).\nDrift on entries that set ignoreDriftForExitCode is excluded.",
+              "description": "ExitCode is the semantic sync exit code (0 clean, 1 failures, 2 drift,\n3 blocked). Drift on entries that set ignoreDriftForExitCode is excluded.",
               "minimum": 0,
               "type": "integer"
             },
@@ -240,6 +334,7 @@
             }
           },
           "required": [
+            "blocked",
             "copied",
             "drifted",
             "entries",

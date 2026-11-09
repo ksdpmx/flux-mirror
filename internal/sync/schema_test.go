@@ -62,6 +62,13 @@ func TestReport_Schema(t *testing.T) {
 						},
 					},
 					{Tag: "v0.9.0", Status: apiv1.StatusSkipped, Reason: apiv1.ReasonUpToDate},
+					{
+						Tag: "v0.8.5", Status: apiv1.StatusBlocked, Digest: "sha256:def",
+						Steps: []apiv1.StepResult{{
+							Name: "signature", Provider: "cosign", Verdict: apiv1.StepVerdictDeny,
+							Reason: "signature policy", Attempts: 1, Duration: "250ms",
+						}},
+					},
 					{Tag: "v0.8.0", Status: apiv1.StatusFailed, Error: "boom"},
 				},
 			},

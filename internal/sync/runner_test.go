@@ -191,6 +191,103 @@ func TestRunner_FailureExitCode(t *testing.T) {
 	g.Expect(copied.Status).To(Equal(StatusCopied))
 }
 
+func TestRunner_GateRunsOutsideCopyBudgetAndCanBlock(t *testing.T) {
+	g := NewWithT(t)
+	r := newRunner(t)
+	r.PerJobTimeout = 10 * time.Millisecond
+	stepResult := StepResult{
+		Name: "signature", Provider: "cosign", Verdict: StepVerdictDeny,
+		Reason: "policy", Attempts: 1, Duration: "20ms",
+	}
+	var copyCalls atomic.Int32
+	job := Job{
+		ID: "v1",
+		Gate: func(context.Context) (GateResult, error) {
+			time.Sleep(20 * time.Millisecond)
+			return GateResult{
+				Terminal: &JobResult{Status: StatusBlocked, Reason: "signature", Digest: "sha256:abc"},
+				Steps:    []StepResult{stepResult},
+				Digest:   "sha256:abc",
+			}, nil
+		},
+		Run: func(context.Context) (JobResult, error) {
+			copyCalls.Add(1)
+			return JobResult{Status: StatusCopied}, nil
+		},
+	}
+	res, err := r.Run(context.Background(), []EntryMirror{
+		&stubMirror{name: "gate", jobs: []Job{job}},
+	})
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(copyCalls.Load()).To(Equal(int32(0)))
+	row := res.Entries[0].Tags[0]
+	g.Expect(row.Status).To(Equal(StatusBlocked))
+	g.Expect(row.Digest).To(Equal("sha256:abc"))
+	g.Expect(row.Steps).To(Equal([]StepResult{stepResult}))
+	g.Expect(res.ExitCode()).To(Equal(3))
+}
+
+func TestRunner_GateErrorRetainsResultsAndIsNotRetried(t *testing.T) {
+	g := NewWithT(t)
+	r := newRunner(t)
+	r.Retries = 3
+	var gateCalls, runCalls atomic.Int32
+	job := Job{
+		ID: "v1",
+		Gate: func(context.Context) (GateResult, error) {
+			gateCalls.Add(1)
+			return GateResult{
+				Steps:  []StepResult{{Name: "signature", Verdict: StepVerdictError, Attempts: 1}},
+				Digest: "sha256:abc",
+			}, errors.New("hook signature: unavailable")
+		},
+		Run: func(context.Context) (JobResult, error) {
+			runCalls.Add(1)
+			return JobResult{Status: StatusCopied}, nil
+		},
+	}
+	res, err := r.Run(context.Background(), []EntryMirror{
+		&stubMirror{name: "gate-error", jobs: []Job{job}},
+	})
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(gateCalls.Load()).To(Equal(int32(1)))
+	g.Expect(runCalls.Load()).To(Equal(int32(0)))
+	row := res.Entries[0].Tags[0]
+	g.Expect(row.Status).To(Equal(StatusFailed))
+	g.Expect(row.Digest).To(Equal("sha256:abc"))
+	g.Expect(row.Steps).To(HaveLen(1))
+	g.Expect(res.ExitCode()).To(Equal(1))
+}
+
+func TestRunner_FailureBlockedAndDriftExitPriority(t *testing.T) {
+	g := NewWithT(t)
+	r := newRunner(t)
+	res, err := r.Run(context.Background(), []EntryMirror{
+		&stubMirror{name: "mixed", jobs: []Job{
+			{ID: "blocked", Gate: func(context.Context) (GateResult, error) {
+				return GateResult{Terminal: &JobResult{Status: StatusBlocked}}, nil
+			}},
+			okJob("drift", StatusDrifted),
+		}},
+	})
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(res.TotalBlocked()).To(Equal(1))
+	g.Expect(res.HasBlocked()).To(BeTrue())
+	g.Expect(res.HasDrift()).To(BeTrue())
+	g.Expect(res.ExitCode()).To(Equal(3))
+
+	res, err = r.Run(context.Background(), []EntryMirror{
+		&stubMirror{name: "failure-wins", jobs: []Job{
+			{ID: "blocked", Gate: func(context.Context) (GateResult, error) {
+				return GateResult{Terminal: &JobResult{Status: StatusBlocked}}, nil
+			}},
+			failJob("failed"),
+		}},
+	})
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(res.ExitCode()).To(Equal(1))
+}
+
 func TestRunner_PlanError(t *testing.T) {
 	g := NewWithT(t)
 	r := newRunner(t)

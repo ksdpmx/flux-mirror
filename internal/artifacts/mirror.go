@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 
 	apiv1 "github.com/fluxcd/flux-mirror/api/v1beta2"
 	"github.com/fluxcd/flux-mirror/internal/helmrepo"
+	"github.com/fluxcd/flux-mirror/internal/hooks"
 	"github.com/fluxcd/flux-mirror/internal/oci"
 	"github.com/fluxcd/flux-mirror/internal/selector"
 	"github.com/fluxcd/flux-mirror/internal/sync"
@@ -40,10 +42,18 @@ type Options struct {
 	// its referrers, which is one or two API calls per tag. Default 1
 	// (sequential).
 	PlanConcurrency int
+	// HookTimeout is the fallback timeout for hook steps with no explicit
+	// timeout. It defaults to five minutes.
+	HookTimeout time.Duration
+	// GateTimeout bounds source/destination comparisons before hook steps. It
+	// defaults to five minutes.
+	GateTimeout time.Duration
 	// Logger is used for warnings (drift, dry-run preview, excluded tags).
 	Logger *slog.Logger
 	// Verifier verifies source artifact signatures when entry.verify is set.
 	Verifier Verifier
+	// HookBuilders override the built-in providers. Primarily used by tests.
+	HookBuilders map[string]hooks.Builder
 
 	// Hosts, Transport and Insecure configure the HTTP client used for
 	// destinationType "artifactory" entries: hosts supplies Basic credentials,
@@ -52,6 +62,96 @@ type Options struct {
 	Hosts     []apiv1.RegistryHost
 	Transport http.RoundTripper
 	Insecure  bool
+}
+
+func (m *mirror) gateTag(ctx context.Context, j *tagJob) (sync.GateResult, error) {
+	compareCtx, cancel := context.WithTimeout(ctx, m.opts.GateTimeout)
+	cmp, err := m.compareTag(compareCtx, j.src, j.dst, j.srcDigest)
+	cancel()
+	if err != nil {
+		return sync.GateResult{}, err
+	}
+	j.srcDigest = cmp.SrcDigest
+	j.compare = &cmp
+
+	switch {
+	case cmp.State == oci.StateEqual:
+		return terminalGate(apiv1.StatusSkipped, apiv1.ReasonUpToDate, cmp.SrcDigest), nil
+	case cmp.State == oci.StateDrifted && !j.overwrite:
+		return terminalGate(apiv1.StatusDrifted, "", cmp.SrcDigest), nil
+	case m.opts.DryRun && cmp.State == oci.StateMissing:
+		return terminalGate(apiv1.StatusWouldCopy, "", cmp.SrcDigest), nil
+	case m.opts.DryRun && cmp.State == oci.StateDrifted:
+		return terminalGate(apiv1.StatusWouldOverwrite, "", cmp.SrcDigest), nil
+	}
+
+	return m.runHooks(ctx, j.tag, j.dst, cmp.SrcDigest)
+}
+
+func (m *mirror) gateChartTag(ctx context.Context, j *tagJob) (sync.GateResult, error) {
+	compareCtx, cancel := context.WithTimeout(ctx, m.opts.GateTimeout)
+	defer cancel()
+	chart, err := m.client.OpenHelmChart(compareCtx, j.src)
+	if err != nil {
+		return sync.GateResult{}, err
+	}
+	if want := strings.ReplaceAll(j.tag, "_", "+"); chart.Version != want {
+		return sync.GateResult{}, fmt.Errorf("chart version %q in %s does not match tag %q", chart.Version, j.src, j.tag)
+	}
+	target, err := m.pusher.ChartURL(chart.Name, chart.Version)
+	if err != nil {
+		return sync.GateResult{}, err
+	}
+	dstDigest, err := m.pusher.Stat(compareCtx, chart.Name, chart.Version)
+	if err != nil {
+		return sync.GateResult{}, err
+	}
+	j.srcDigest = chart.ManifestDigest
+	j.chartDstHash = dstDigest
+	j.chartCompared = true
+
+	switch {
+	case dstDigest == chart.LayerDigest:
+		return terminalGate(apiv1.StatusSkipped, apiv1.ReasonUpToDate, chart.LayerDigest), nil
+	case dstDigest != "" && !j.overwrite:
+		m.opts.Logger.Warn("destination chart drifted from source; skipping (overwrite=false)",
+			"src", j.src, "src_digest", chart.LayerDigest, "dst", target, "dst_digest", dstDigest)
+		return terminalGate(apiv1.StatusDrifted, "", chart.LayerDigest), nil
+	case m.opts.DryRun && dstDigest == "":
+		return terminalGate(apiv1.StatusWouldCopy, "", chart.LayerDigest), nil
+	case m.opts.DryRun:
+		return terminalGate(apiv1.StatusWouldOverwrite, "", chart.LayerDigest), nil
+	}
+	return m.runHooks(ctx, j.tag, target, chart.ManifestDigest)
+}
+
+func (m *mirror) runHooks(ctx context.Context, tag, destination, digest string) (sync.GateResult, error) {
+	result, err := m.hooks.Run(ctx, hooks.Input{
+		Source:      m.entry.Source,
+		Tag:         tag,
+		Destination: destination,
+		Digest:      digest,
+	})
+	gate := sync.GateResult{Steps: result.Steps, Digest: digest}
+	if err != nil {
+		return gate, err
+	}
+	if result.Terminal != nil {
+		gate.Terminal = &sync.JobResult{
+			Status: result.Terminal.Status,
+			Reason: result.Terminal.Reason,
+			Digest: result.Terminal.Digest,
+		}
+	}
+	return gate, nil
+}
+
+func terminalGate(status apiv1.Status, reason, digest string) sync.GateResult {
+	return sync.GateResult{Terminal: &sync.JobResult{
+		Status: status,
+		Reason: reason,
+		Digest: digest,
+	}}
 }
 
 // Verifier checks a selected source reference before it is mirrored. On
@@ -73,6 +173,12 @@ func New(client *oci.Client, entry apiv1.ArtifactEntry, opts Options) sync.Entry
 	if opts.PlanConcurrency <= 0 {
 		opts.PlanConcurrency = 1
 	}
+	if opts.HookTimeout <= 0 {
+		opts.HookTimeout = 5 * time.Minute
+	}
+	if opts.GateTimeout <= 0 {
+		opts.GateTimeout = 5 * time.Minute
+	}
 	if opts.Verifier == nil {
 		opts.Verifier = oci.NewVerifier(client)
 	}
@@ -84,19 +190,23 @@ type mirror struct {
 	entry  apiv1.ArtifactEntry
 	opts   Options
 	pusher *helmrepo.Pusher // set by Plan for destinationType "artifactory"
+	hooks  *hooks.Runner
 }
 
 // tagJob carries everything a per-tag job needs that was resolved at plan
 // time. Pulling these into a struct keeps runTag's signature compact and
 // makes the "captured at plan time" relationship explicit.
 type tagJob struct {
-	tag          string
-	src          string
-	dst          string
-	srcDigest    string // pre-fetched when verified or when refs were snapshotted; otherwise ""
-	refs         []oci.Referrer
-	overwrite    bool
-	verification *apiv1.Verification // confirmed at plan time when entry.verify is set
+	tag           string
+	src           string
+	dst           string
+	srcDigest     string // pre-fetched when verified or when refs were snapshotted; otherwise ""
+	refs          []oci.Referrer
+	overwrite     bool
+	verification  *apiv1.Verification // confirmed at plan time when entry.verify is set
+	compare       *oci.CompareResult
+	chartDstHash  string
+	chartCompared bool
 }
 
 func (m *mirror) Plan(ctx context.Context) (sync.Plan, error) {
@@ -106,6 +216,10 @@ func (m *mirror) Plan(ctx context.Context) (sync.Plan, error) {
 		IgnoreDriftForExitCode: m.entry.IgnoreDriftForExitCode,
 	}
 	start := time.Now()
+
+	if err := m.buildHookRunner(); err != nil {
+		return plan, err
+	}
 
 	m.opts.Logger.Info("planning tags", "source", m.entry.Source, "destination", m.entry.Destination)
 	tags, err := m.client.ListTags(ctx, m.entry.Source)
@@ -275,31 +389,69 @@ func (m *mirror) Plan(ctx context.Context) (sync.Plan, error) {
 		if job == nil {
 			continue
 		}
-		run := func(jctx context.Context) (sync.JobResult, error) { return m.runTag(jctx, *job) }
+		run := func(jctx context.Context) (sync.JobResult, error) { return m.runTag(jctx, job) }
 		if toHelmRepo {
-			run = func(jctx context.Context) (sync.JobResult, error) { return m.runChartTag(jctx, *job) }
+			run = func(jctx context.Context) (sync.JobResult, error) { return m.runChartTag(jctx, job) }
 		}
 		plan.Jobs = append(plan.Jobs, sync.Job{
 			ID:           job.tag,
 			Dst:          job.dst,
 			Verification: job.verification,
+			Gate:         m.gateJob(job, toHelmRepo),
 			Run:          run,
 		})
 	}
 	return plan, nil
 }
 
+func (m *mirror) buildHookRunner() error {
+	if m.entry.Hooks == nil || len(m.entry.Hooks.Pre) == 0 {
+		return nil
+	}
+	builders := m.opts.HookBuilders
+	if builders == nil {
+		builders = map[string]hooks.Builder{
+			apiv1.HookProviderCosign: hooks.CosignBuilder(oci.NewVerifier(m.client)),
+		}
+	}
+	hookRunner, err := hooks.NewRunner(*m.entry.Hooks, m.opts.HookTimeout, builders)
+	if err != nil {
+		return err
+	}
+	m.hooks = hookRunner
+	return nil
+}
+
+func (m *mirror) gateJob(job *tagJob, toHelmRepo bool) func(context.Context) (sync.GateResult, error) {
+	if m.hooks == nil {
+		return nil
+	}
+	return func(ctx context.Context) (sync.GateResult, error) {
+		if toHelmRepo {
+			return m.gateChartTag(ctx, job)
+		}
+		return m.gateTag(ctx, job)
+	}
+}
+
 // runTag executes one tag's mirror flow. Idempotent — safe to retry under
 // the runner's per-tag budget.
-func (m *mirror) runTag(ctx context.Context, j tagJob) (sync.JobResult, error) {
+func (m *mirror) runTag(ctx context.Context, j *tagJob) (sync.JobResult, error) {
 	start := time.Now()
 	m.opts.Logger.Info("mirroring tag", "src", j.src, "dst", j.dst)
 
 	// When verification or referrer snapshotting resolved the source digest at
 	// plan time, use that digest as the source of truth.
-	cmp, err := m.compareTag(ctx, j.src, j.dst, j.srcDigest)
-	if err != nil {
-		return sync.JobResult{}, err
+	var cmp oci.CompareResult
+	if j.compare != nil {
+		cmp = *j.compare
+		j.compare = nil
+	} else {
+		var err error
+		cmp, err = m.compareTag(ctx, j.src, j.dst, j.srcDigest)
+		if err != nil {
+			return sync.JobResult{}, err
+		}
 	}
 
 	copySrc := m.entry.Source + "@" + cmp.SrcDigest

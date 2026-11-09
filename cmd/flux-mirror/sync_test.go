@@ -33,6 +33,7 @@ import (
 	apiv1 "github.com/fluxcd/flux-mirror/api/v1beta2"
 	"github.com/fluxcd/flux-mirror/internal/oci"
 	"github.com/fluxcd/flux-mirror/internal/registryauth"
+	syncpkg "github.com/fluxcd/flux-mirror/internal/sync"
 	"github.com/fluxcd/flux-mirror/internal/testregistry"
 )
 
@@ -624,6 +625,40 @@ func TestSync_DriftExitCodeValidation(t *testing.T) {
 	g.Expect(err.Error()).To(ContainSubstring("--drift-exit-code must be between 0 and 255"))
 }
 
+func TestSync_BlockedExitCode(t *testing.T) {
+	g := NewWithT(t)
+	blocked := syncpkg.Result{Entries: []apiv1.EntryResult{{
+		Tags: []apiv1.TagResult{{Status: apiv1.StatusBlocked}},
+	}}}
+
+	err := classifyExit(blocked, syncDefaultDriftExitCode, syncDefaultBlockedExitCode)
+	var ec interface{ ExitCode() int }
+	g.Expect(errors.As(err, &ec)).To(BeTrue())
+	g.Expect(ec.ExitCode()).To(Equal(3))
+
+	g.Expect(classifyExit(blocked, syncDefaultDriftExitCode, 0)).ToNot(HaveOccurred())
+
+	withDrift := syncpkg.Result{Entries: []apiv1.EntryResult{{
+		Tags: []apiv1.TagResult{
+			{Status: apiv1.StatusBlocked},
+			{Status: apiv1.StatusDrifted},
+		},
+	}}}
+	err = classifyExit(withDrift, syncDefaultDriftExitCode, 7)
+	g.Expect(errors.As(err, &ec)).To(BeTrue())
+	g.Expect(ec.ExitCode()).To(Equal(7))
+
+	withFailure := syncpkg.Result{Entries: []apiv1.EntryResult{{
+		Tags: []apiv1.TagResult{
+			{Status: apiv1.StatusBlocked},
+			{Status: apiv1.StatusFailed},
+		},
+	}}}
+	err = classifyExit(withFailure, syncDefaultDriftExitCode, 7)
+	g.Expect(errors.As(err, &ec)).To(BeTrue())
+	g.Expect(ec.ExitCode()).To(Equal(1))
+}
+
 func TestSync_FlagValidation(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -645,6 +680,16 @@ func TestSync_FlagValidation(t *testing.T) {
 			name:      "rejects non-positive sync timeout",
 			args:      []string{"sync", "config.yaml", "--timeout", "0s"},
 			wantError: "--timeout must be greater than 0",
+		},
+		{
+			name:      "rejects negative blocked exit code",
+			args:      []string{"sync", "config.yaml", "--blocked-exit-code", "-1"},
+			wantError: "--blocked-exit-code must be between 0 and 255",
+		},
+		{
+			name:      "rejects blocked exit code above 255",
+			args:      []string{"sync", "config.yaml", "--blocked-exit-code", "256"},
+			wantError: "--blocked-exit-code must be between 0 and 255",
 		},
 		{
 			name: "rejects non-positive inherited root timeout",

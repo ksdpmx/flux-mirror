@@ -127,7 +127,8 @@ Each entry has two required fields:
 
 It also has optional fields documented below: `.selector`
 ([Tag selection](#tag-selection)), `.includeReferrers` ([Referrers](#referrers)),
-`.verify` ([Signature verification](#signature-verification)), `.overwrite`
+`.verify` ([Signature verification](#signature-verification)), `.hooks`
+([Pre-copy hooks](#pre-copy-hooks)), `.overwrite`
 ([Overwrite and drift behavior](#overwrite-and-drift-behavior)), 
 `.ignoreDriftForExitCode` ([Overwrite and drift behavior](#overwrite-and-drift-behavior)) and
 `.destinationType` ([Publishing to a Helm repository](#publishing-to-a-helm-repository)).
@@ -270,6 +271,51 @@ artifacts:
       matchOIDCIdentity:
         - issuer: https://token.actions.githubusercontent.com
           subject: ^https://github\.com/stefanprodan/.*$
+```
+
+#### Pre-copy hooks
+
+`.artifacts[].hooks.pre` is an optional ordered list of checks that run after
+the source/destination comparison and before copying a tag. The first release
+supports the `cosign` provider, which verifies keyless signatures discovered
+through the OCI 1.1 referrers API. It does not discover legacy
+`sha256-<digest>.sig` tags. Hooks are not run for up-to-date or drifted tags, or
+under `--dry-run`; `charts[]` does not support hooks yet.
+
+Each step has a unique lowercase `.name`, a `.provider`, and a provider-specific
+configuration block named after that provider. `cosign.matchOIDCIdentity`
+uses the same issuer and subject-regexp rules as [`verify`](#signature-verification).
+An entry cannot combine `verify:` and `hooks.pre`, because that would verify
+each tag twice.
+
+Common step controls are optional:
+
+- `.timeout` is the total step budget, including retries; it defaults to
+  `--timeout`.
+- `.concurrency` caps simultaneous tags running this step; it defaults to `1`.
+- `.retries` is the number of extra attempts after an infrastructure error; it
+  defaults to `0`. Policy denials are not retried.
+- `.onFailure` is `block` (default) or `warn`. A blocked infrastructure error
+  fails the tag; `warn` records the error and continues to the copy.
+
+A policy denial returns a `blocked` tag with `reason` set to the step name.
+An `allow` verdict continues to the next step. A provider may also return
+`skip`, which records a skipped tag and its reason.
+
+```yaml
+artifacts:
+  - source: ghcr.io/example/image
+    destination: quay.io/mirror/image
+    selector:
+      semver: ">=1.0.0"
+    hooks:
+      pre:
+        - name: signature
+          provider: cosign
+          cosign:
+            matchOIDCIdentity:
+              - issuer: https://token.actions.githubusercontent.com
+                subject: ^https://github\.com/example/image/.*$
 ```
 
 ### Charts
@@ -839,6 +885,7 @@ first mirrored. Referrers that exist with a different digest are skipped
 | `artifacts[].ignoreDriftForExitCode` | `false`    |
 | `artifacts[].destinationType`        | `oci`      |
 | `artifacts[].verify`                 | unset      |
+| `artifacts[].hooks`                  | unset      |
 | `charts[].destinationType`           | `oci`      |
 | `charts[].selector.sortBy`           | `semver`   |
 | `charts[].selector.limit`            | `1`        |

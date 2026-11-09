@@ -30,6 +30,8 @@ on upstream chart repositories.
 - **OCI 1.1 referrers** — opt-in mirror of signatures, SBOMs, and attestations attached to artifacts.
 - **Cosign verification** — opt-in keyless signature verification for selected
   source artifacts before they are mirrored, with optional minimum signature age.
+- **Pre-copy gates** — ordered per-tag hooks for OCI artifacts; the initial
+  `cosign` provider checks keyless signatures published as OCI referrers.
 - **Selector pipeline** — the same four-step `regex → semver → sort → top-N`
   filter for OCI artifacts and Helm charts. Sort by `semver`, `alphabetical`, or
   `numerical`.
@@ -122,13 +124,14 @@ See [`examples/`](examples) for more configurations and
 ## Running in CI
 
 `flux mirror sync` is designed for unattended runs. The exit code separates
-real failures from drift, so a CI gate can react to each independently:
+failures, drift, and hook blocks, so a CI gate can react to each independently:
 
 | Code | Meaning                                                                                                    |
 |------|------------------------------------------------------------------------------------------------------------|
 | `0`  | Clean run, every tag was copied or skipped as expected.                                                    |
 | `1`  | At least one tag job failed (network error, push rejected, retries exhausted).                             |
 | `2`  | No failures, but at least one tag drifted with `overwrite: false` (configurable with `--drift-exit-code`). Drift on artifacts or charts with `ignoreDriftForExitCode: true` is excluded. |
+| `3`  | No failures, but at least one tag was blocked by a pre-copy hook (configurable with `--blocked-exit-code`). |
 
 The `--no-progress` flag suppresses the live spinner so log output stays clean in CI:
 

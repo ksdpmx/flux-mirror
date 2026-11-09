@@ -28,6 +28,24 @@ func (r Result) HasFailures() bool {
 	return r.TotalFailures() > 0
 }
 
+// HasBlocked reports whether any hook blocked a tag.
+func (r Result) HasBlocked() bool {
+	return r.TotalBlocked() > 0
+}
+
+// TotalBlocked sums tags rejected by a hook policy.
+func (r Result) TotalBlocked() int {
+	n := 0
+	for _, e := range r.Entries {
+		for _, t := range e.Tags {
+			if t.Status == apiv1.StatusBlocked {
+				n++
+			}
+		}
+	}
+	return n
+}
+
 // TotalFailures sums per-tag StatusFailed rows plus plan-failed entries.
 func (r Result) TotalFailures() int {
 	n := 0
@@ -87,13 +105,17 @@ func (r Result) HasDriftForExitCode() bool {
 //	0 — clean
 //	1 — at least one tag failed
 //	2 — no failures but at least one drift detected
+//	3 — no failures but at least one tag was blocked
 //
 // Drift from entries that set IgnoreDriftForExitCode is reported but does not
-// trigger the drift exit code. Failures take precedence over drift (a real
-// error is always page-worthy).
+// trigger the drift exit code. Failures take precedence over blocked, which
+// takes precedence over drift.
 func (r Result) ExitCode() int {
 	if r.HasFailures() {
 		return 1
+	}
+	if r.HasBlocked() {
+		return 3
 	}
 	if r.HasDriftForExitCode() {
 		return 2
@@ -190,6 +212,7 @@ var summaryOrder = []apiv1.Status{
 	apiv1.StatusCopied,
 	apiv1.StatusOverwritten,
 	apiv1.StatusSkipped,
+	apiv1.StatusBlocked,
 	apiv1.StatusDrifted,
 }
 
@@ -203,6 +226,7 @@ var prettyPrintOrder = []apiv1.Status{
 	apiv1.StatusDrifted,
 	apiv1.StatusWouldCopy,
 	apiv1.StatusWouldOverwrite,
+	apiv1.StatusBlocked,
 }
 
 func entryAttrs(e apiv1.EntryResult) []any {

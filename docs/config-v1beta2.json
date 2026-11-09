@@ -26,6 +26,92 @@
             ],
             "type": "string"
           },
+          "hooks": {
+            "additionalProperties": false,
+            "description": "Hooks configures checks that run before an artifact is copied.",
+            "properties": {
+              "pre": {
+                "description": "Pre lists checks to run before a tag is copied.",
+                "items": {
+                  "additionalProperties": false,
+                  "description": "HookStep configures one pre-copy hook.",
+                  "properties": {
+                    "concurrency": {
+                      "description": "Concurrency caps the number of tags executing this step at once.\nDefaults to 1.",
+                      "type": "integer"
+                    },
+                    "cosign": {
+                      "additionalProperties": false,
+                      "description": "Cosign configures keyless cosign verification for this step.",
+                      "properties": {
+                        "matchOIDCIdentity": {
+                          "description": "MatchOIDCIdentity lists the Fulcio certificate identities to accept.",
+                          "items": {
+                            "additionalProperties": false,
+                            "description": "OIDCIdentity matches a Fulcio certificate identity.",
+                            "properties": {
+                              "issuer": {
+                                "description": "Issuer is the OIDC issuer URL of the signing identity.",
+                                "type": "string"
+                              },
+                              "subject": {
+                                "description": "Subject is a regexp matched against the certificate subject.",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "issuer",
+                              "subject"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "matchOIDCIdentity"
+                      ],
+                      "type": "object"
+                    },
+                    "name": {
+                      "description": "Name is a unique identifier for this step within the artifact entry.",
+                      "type": "string"
+                    },
+                    "onFailure": {
+                      "description": "OnFailure controls whether an exhausted step error blocks the tag or\nallows mirroring to continue. Defaults to \"block\".",
+                      "enum": [
+                        "block",
+                        "warn"
+                      ],
+                      "type": "string"
+                    },
+                    "provider": {
+                      "description": "Provider selects the hook implementation.",
+                      "enum": [
+                        "cosign"
+                      ],
+                      "type": "string"
+                    },
+                    "retries": {
+                      "description": "Retries is the number of extra attempts after an infrastructure error.\nDefaults to 0.",
+                      "type": "integer"
+                    },
+                    "timeout": {
+                      "description": "Timeout is the total time allowed for this step, including retries.\nDefaults to the sync --timeout.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "provider"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
           "ignoreDriftForExitCode": {
             "description": "IgnoreDriftForExitCode still reports and logs drifted tags, but excludes\nthem from the drift exit code. When every drifted tag belongs to an entry\nwith this field set, the run does not exit with the --drift-exit-code\nvalue.",
             "type": "boolean"

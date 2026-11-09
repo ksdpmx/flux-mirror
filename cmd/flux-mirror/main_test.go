@@ -55,11 +55,12 @@ func resetCmdArgs() {
 
 	versionArgs = versionFlags{output: "text"}
 	syncArgs = syncFlags{
-		output:        "text",
-		concurrency:   4,
-		timeout:       syncDefaultTimeout,
-		retries:       3,
-		driftExitCode: syncDefaultDriftExitCode,
+		output:          "text",
+		concurrency:     4,
+		timeout:         syncDefaultTimeout,
+		retries:         3,
+		driftExitCode:   syncDefaultDriftExitCode,
+		blockedExitCode: syncDefaultBlockedExitCode,
 		tokenCacheOptions: pkgcache.TokenFlags{
 			MaxSize:     tokenCacheDefaultMaxSize,
 			MaxDuration: pkgcache.TokenMaxDuration,

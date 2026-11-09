@@ -46,7 +46,7 @@ func (m *mirror) newPusher() (*helmrepo.Pusher, error) {
 // runChartTag mirrors one OCI Helm chart tag to the Helm repository. A failure
 // (including a chart/tag version mismatch) fails only this tag. Idempotent —
 // safe to retry under the runner's per-tag budget.
-func (m *mirror) runChartTag(ctx context.Context, j tagJob) (sync.JobResult, error) {
+func (m *mirror) runChartTag(ctx context.Context, j *tagJob) (sync.JobResult, error) {
 	start := time.Now()
 
 	// Pin to the digest confirmed by verification so the bytes uploaded are the
@@ -70,9 +70,15 @@ func (m *mirror) runChartTag(ctx context.Context, j tagJob) (sync.JobResult, err
 	}
 	m.opts.Logger.Info("mirroring chart", "src", j.src, "dst", target)
 
-	dstDigest, err := m.pusher.Stat(ctx, chart.Name, chart.Version)
-	if err != nil {
-		return res, err
+	dstDigest := ""
+	if j.chartCompared {
+		dstDigest = j.chartDstHash
+		j.chartCompared = false
+	} else {
+		dstDigest, err = m.pusher.Stat(ctx, chart.Name, chart.Version)
+		if err != nil {
+			return res, err
+		}
 	}
 
 	switch {

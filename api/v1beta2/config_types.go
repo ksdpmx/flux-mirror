@@ -25,6 +25,14 @@ const (
 	// (ArtifactVerification.Provider).
 	VerifyProviderCosign = "cosign"
 
+	// HookProviderCosign selects cosign keyless signature checks in hooks.
+	HookProviderCosign = "cosign"
+
+	// HookFailureBlock blocks the tag when a hook step errors.
+	HookFailureBlock = "block"
+	// HookFailureWarn records a hook step error and continues.
+	HookFailureWarn = "warn"
+
 	// JWTProviderGitHub mints a GitHub Actions OIDC ID token for the audience.
 	// It and JWTProviderForgejo currently mint tokens the same way (the
 	// GitHub/Forgejo Actions endpoint), but they are kept as distinct values so
@@ -524,6 +532,10 @@ type ArtifactEntry struct {
 	// Verify configures signature verification for source artifacts.
 	// +optional
 	Verify *ArtifactVerification `json:"verify,omitempty"`
+
+	// Hooks configures checks that run before an artifact is copied.
+	// +optional
+	Hooks *ArtifactHooks `json:"hooks,omitempty"`
 }
 
 // EffectiveDestinationType returns the destination type with the documented
@@ -548,6 +560,54 @@ type ArtifactVerification struct {
 	// MinAge requires a signature to be at least this old before mirroring.
 	// +optional
 	MinAge *metav1.Duration `json:"minAge,omitempty"`
+}
+
+// ArtifactHooks configures ordered per-tag hook steps.
+type ArtifactHooks struct {
+	// Pre lists checks to run before a tag is copied.
+	// +optional
+	Pre []HookStep `json:"pre,omitempty"`
+}
+
+// HookStep configures one pre-copy hook.
+type HookStep struct {
+	// Name is a unique identifier for this step within the artifact entry.
+	Name string `json:"name"`
+
+	// Provider selects the hook implementation.
+	// +kubebuilder:validation:Enum=cosign
+	Provider string `json:"provider"`
+
+	// Timeout is the total time allowed for this step, including retries.
+	// Defaults to the sync --timeout.
+	// +optional
+	Timeout *metav1.Duration `json:"timeout,omitempty"`
+
+	// Concurrency caps the number of tags executing this step at once.
+	// Defaults to 1.
+	// +optional
+	Concurrency *int `json:"concurrency,omitempty"`
+
+	// Retries is the number of extra attempts after an infrastructure error.
+	// Defaults to 0.
+	// +optional
+	Retries *int `json:"retries,omitempty"`
+
+	// OnFailure controls whether an exhausted step error blocks the tag or
+	// allows mirroring to continue. Defaults to "block".
+	// +kubebuilder:validation:Enum=block;warn
+	// +optional
+	OnFailure string `json:"onFailure,omitempty"`
+
+	// Cosign configures keyless cosign verification for this step.
+	// +optional
+	Cosign *CosignHookConfig `json:"cosign,omitempty"`
+}
+
+// CosignHookConfig configures cosign signature identity matching for a hook.
+type CosignHookConfig struct {
+	// MatchOIDCIdentity lists the Fulcio certificate identities to accept.
+	MatchOIDCIdentity []OIDCIdentity `json:"matchOIDCIdentity"`
 }
 
 // OIDCIdentity matches a Fulcio certificate identity.

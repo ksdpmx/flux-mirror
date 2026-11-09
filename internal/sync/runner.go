@@ -140,6 +140,7 @@ func (r *Runner) runEntry(ctx context.Context, m EntryMirror) (apiv1.EntryResult
 			Verification: job.Verification,
 			Digest:       res.Digest,
 			Referrers:    res.Referrers,
+			Steps:        res.Steps,
 		}
 		if err != nil {
 			row.Status = apiv1.StatusFailed
@@ -162,7 +163,27 @@ func (r *Runner) runEntry(ctx context.Context, m EntryMirror) (apiv1.EntryResult
 			// the retry budget — retrying a guaranteed failure is wasted work.
 			res, err := JobResult{}, job.PlanError
 			if err == nil {
-				res, err = r.runJob(gctx, job)
+				runCopy := true
+				if job.Gate != nil {
+					gate, gateErr := job.Gate(gctx)
+					res.Steps = gate.Steps
+					res.Digest = gate.Digest
+					if gateErr != nil {
+						err = gateErr
+					} else if gate.Terminal != nil {
+						res = *gate.Terminal
+						res.Steps = gate.Steps
+						if res.Digest == "" {
+							res.Digest = gate.Digest
+						}
+						runCopy = false
+					}
+				}
+				if err == nil && runCopy {
+					steps := res.Steps
+					res, err = r.runJob(gctx, job)
+					res.Steps = steps
+				}
 				if err == nil && !res.Status.Valid() {
 					err = fmt.Errorf("entry returned invalid status %q", string(res.Status))
 				}

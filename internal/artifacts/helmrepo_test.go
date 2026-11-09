@@ -13,6 +13,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	apiv1 "github.com/fluxcd/flux-mirror/api/v1beta2"
+	"github.com/fluxcd/flux-mirror/internal/hooks"
 	"github.com/fluxcd/flux-mirror/internal/oci"
 	"github.com/fluxcd/flux-mirror/internal/sync"
 	"github.com/fluxcd/flux-mirror/internal/testregistry"
@@ -99,6 +100,38 @@ func TestMirror_ChartToHelmRepo(t *testing.T) {
 	e = run(entry, helmOpts())
 	g.Expect(tagsWithStatus(e, apiv1.StatusOverwritten)).To(HaveLen(1))
 	g.Expect(stored(fake, "/helm-local/team/podinfo-1.0.0.tgz")).To(Equal(tgz1))
+}
+
+func TestMirror_ChartToHelmRepoHookDenyBlocksUpload(t *testing.T) {
+	g := NewWithT(t)
+	src := repo("helm-hook-src")
+	c := oci.NewClient(oci.Insecure())
+	pushChartFixture(t, c, src+":1.0.0", "1.0.0")
+	manifestDigest, err := c.Digest(context.Background(), src+":1.0.0")
+	g.Expect(err).ToNot(HaveOccurred())
+	fake, url := newFakeHelmRepo(t)
+	entry := chartEntry(src, url)
+	entry.Hooks = testHookEntry(src, "quay.io/mirror/chart").Hooks
+	var input hooks.Input
+
+	opts := helmOpts()
+	opts.HookBuilders = map[string]hooks.Builder{
+		apiv1.HookProviderCosign: func(apiv1.HookStep) (hooks.Step, error) {
+			return testHookStep(func(_ context.Context, got hooks.Input) (hooks.Outcome, error) {
+				input = got
+				return hooks.Outcome{Verdict: apiv1.StepVerdictDeny, Reason: "untrusted"}, nil
+			}), nil
+		},
+	}
+	res, err := newRunner().Run(context.Background(), []sync.EntryMirror{New(c, entry, opts)})
+	g.Expect(err).ToNot(HaveOccurred())
+	row := res.Entries[0].Tags[0]
+	g.Expect(row.Status).To(Equal(apiv1.StatusBlocked))
+	g.Expect(row.Digest).To(HavePrefix("sha256:"))
+	g.Expect(input.Digest).To(Equal(manifestDigest))
+	g.Expect(input.Source).To(Equal(src))
+	g.Expect(input.Destination).To(ContainSubstring("podinfo-1.0.0.tgz"))
+	g.Expect(fake.Paths()).To(BeEmpty())
 }
 
 func TestMirror_ChartToHelmRepoRejectsImage(t *testing.T) {

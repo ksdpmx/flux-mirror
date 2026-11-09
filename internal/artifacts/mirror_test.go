@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	apiv1 "github.com/fluxcd/flux-mirror/api/v1beta2"
+	"github.com/fluxcd/flux-mirror/internal/hooks"
 	"github.com/fluxcd/flux-mirror/internal/oci"
 	"github.com/fluxcd/flux-mirror/internal/sync"
 	"github.com/fluxcd/flux-mirror/internal/testregistry"
@@ -107,6 +109,151 @@ func TestMirror_CopiesSelectedTags(t *testing.T) {
 	g.Expect(err).ToNot(HaveOccurred())
 	// Top-2 of {1.0.0, 1.1.0, 1.2.0} by semver = 1.1.0 and 1.2.0.
 	g.Expect(tags).To(ConsistOf("1.1.0", "1.2.0"))
+}
+
+type testHookStep func(context.Context, hooks.Input) (hooks.Outcome, error)
+
+func (f testHookStep) Run(ctx context.Context, input hooks.Input) (hooks.Outcome, error) {
+	return f(ctx, input)
+}
+
+func testHookEntry(src, dst string) apiv1.ArtifactEntry {
+	return apiv1.ArtifactEntry{
+		Source:      src,
+		Destination: dst,
+		Selector:    apiv1.Selector{Limit: new(1)},
+		Hooks: &apiv1.ArtifactHooks{Pre: []apiv1.HookStep{{
+			Name:     "signature",
+			Provider: apiv1.HookProviderCosign,
+			Cosign: &apiv1.CosignHookConfig{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
+				Issuer: "issuer", Subject: "subject",
+			}}},
+		}}},
+	}
+}
+
+func TestMirror_HookDenyBlocksBeforeCopy(t *testing.T) {
+	g := NewWithT(t)
+	src := repo("hook-deny-src")
+	dst := repo("hook-deny-dst")
+	testregistry.PushImage(t, src+":1.0.0")
+	c := oci.NewClient(oci.Insecure())
+	var input hooks.Input
+
+	entry := testHookEntry(src, dst)
+	mirror := New(c, entry, Options{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		HookBuilders: map[string]hooks.Builder{
+			apiv1.HookProviderCosign: func(apiv1.HookStep) (hooks.Step, error) {
+				return testHookStep(func(_ context.Context, got hooks.Input) (hooks.Outcome, error) {
+					input = got
+					return hooks.Outcome{Verdict: apiv1.StepVerdictDeny, Reason: "untrusted"}, nil
+				}), nil
+			},
+		},
+	})
+	res, err := newRunner().Run(context.Background(), []sync.EntryMirror{mirror})
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(res.ExitCode()).To(Equal(3))
+	g.Expect(res.TotalBlocked()).To(Equal(1))
+
+	row := res.Entries[0].Tags[0]
+	g.Expect(row.Status).To(Equal(apiv1.StatusBlocked))
+	g.Expect(row.Reason).To(Equal("signature"))
+	g.Expect(row.Digest).To(HavePrefix("sha256:"))
+	g.Expect(row.Steps).To(HaveLen(1))
+	g.Expect(row.Steps[0].Verdict).To(Equal(apiv1.StepVerdictDeny))
+	g.Expect(row.Steps[0].Reason).To(Equal("untrusted"))
+	g.Expect(input.Source).To(Equal(src))
+	g.Expect(input.Tag).To(Equal("1.0.0"))
+	g.Expect(input.Destination).To(Equal(dst + ":1.0.0"))
+	g.Expect(input.Digest).To(Equal(row.Digest))
+
+	cmp, err := c.Compare(context.Background(), src+":1.0.0", dst+":1.0.0")
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(cmp.State).To(Equal(oci.StateMissing))
+}
+
+func TestMirror_HookAllowCopiesAndReportsStep(t *testing.T) {
+	g := NewWithT(t)
+	src := repo("hook-allow-src")
+	dst := repo("hook-allow-dst")
+	testregistry.PushImage(t, src+":1.0.0")
+	c := oci.NewClient(oci.Insecure())
+	entry := testHookEntry(src, dst)
+	mirror := New(c, entry, Options{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		HookBuilders: map[string]hooks.Builder{
+			apiv1.HookProviderCosign: func(apiv1.HookStep) (hooks.Step, error) {
+				return testHookStep(func(context.Context, hooks.Input) (hooks.Outcome, error) {
+					return hooks.Outcome{
+						Verdict: apiv1.StepVerdictAllow,
+						Cosign: &apiv1.Verification{
+							Provider: apiv1.VerifyProviderCosign,
+							Issuer:   "issuer",
+							Identity: "identity",
+						},
+					}, nil
+				}), nil
+			},
+		},
+	})
+	res, err := newRunner().Run(context.Background(), []sync.EntryMirror{mirror})
+	g.Expect(err).ToNot(HaveOccurred())
+
+	row := res.Entries[0].Tags[0]
+	g.Expect(row.Status).To(Equal(apiv1.StatusCopied))
+	g.Expect(row.Steps).To(HaveLen(1))
+	g.Expect(row.Steps[0].Verdict).To(Equal(apiv1.StepVerdictAllow))
+	g.Expect(row.Steps[0].Cosign).To(Equal(&apiv1.Verification{
+		Provider: apiv1.VerifyProviderCosign,
+		Issuer:   "issuer",
+		Identity: "identity",
+	}))
+	cmp, err := c.Compare(context.Background(), src+":1.0.0", dst+":1.0.0")
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(cmp.State).To(Equal(oci.StateEqual))
+}
+
+func TestMirror_HooksSkipUpToDateAndDryRunTags(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		upToDate   bool
+		dryRun     bool
+		wantStatus apiv1.Status
+	}{
+		{name: "up to date", upToDate: true, wantStatus: apiv1.StatusSkipped},
+		{name: "dry run", dryRun: true, wantStatus: apiv1.StatusWouldCopy},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+			src := repo("hook-skip-src-" + testregistry.RandSuffix())
+			dst := repo("hook-skip-dst-" + testregistry.RandSuffix())
+			testregistry.PushImage(t, src+":1.0.0")
+			c := oci.NewClient(oci.Insecure())
+			if tt.upToDate {
+				g.Expect(c.CopyTag(context.Background(), src+":1.0.0", dst+":1.0.0", 1)).To(Succeed())
+			}
+			var calls atomic.Int32
+			mirror := New(c, testHookEntry(src, dst), Options{
+				DryRun: tt.dryRun,
+				Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+				HookBuilders: map[string]hooks.Builder{
+					apiv1.HookProviderCosign: func(apiv1.HookStep) (hooks.Step, error) {
+						return testHookStep(func(context.Context, hooks.Input) (hooks.Outcome, error) {
+							calls.Add(1)
+							return hooks.Outcome{Verdict: apiv1.StepVerdictAllow}, nil
+						}), nil
+					},
+				},
+			})
+			res, err := newRunner().Run(context.Background(), []sync.EntryMirror{mirror})
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(calls.Load()).To(Equal(int32(0)))
+			g.Expect(res.Entries[0].Tags[0].Status).To(Equal(tt.wantStatus))
+			g.Expect(res.Entries[0].Tags[0].Steps).To(BeEmpty())
+		})
+	}
 }
 
 func TestMirror_VerifiesSelectedTags(t *testing.T) {

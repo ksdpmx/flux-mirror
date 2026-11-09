@@ -52,7 +52,7 @@ type ReportSpec struct {
 // ReportSummary aggregates per-outcome tag counts across all entries. Every
 // field is always present (zero when unused) so consumers can rely on a stable
 // key set. ExitCode is the semantic sync exit code (0 clean, 1 failures,
-// 2 drift) and is not affected by the --drift-exit-code override.
+// 2 drift, 3 blocked) and is not affected by CLI exit-code overrides.
 type ReportSummary struct {
 	// Entries is the number of mirror entries processed.
 	// +kubebuilder:validation:Minimum=0
@@ -87,8 +87,12 @@ type ReportSummary struct {
 	// +kubebuilder:validation:Minimum=0
 	Failed int `json:"failed"`
 
-	// ExitCode is the semantic sync exit code (0 clean, 1 failures, 2 drift).
-	// Drift on entries that set ignoreDriftForExitCode is excluded.
+	// Blocked is the number of tags rejected by a hook policy.
+	// +kubebuilder:validation:Minimum=0
+	Blocked int `json:"blocked"`
+
+	// ExitCode is the semantic sync exit code (0 clean, 1 failures, 2 drift,
+	// 3 blocked). Drift on entries that set ignoreDriftForExitCode is excluded.
 	// +kubebuilder:validation:Minimum=0
 	ExitCode int `json:"exitCode"`
 }
@@ -139,9 +143,9 @@ type EntryResult struct {
 }
 
 // TagResult is one tag's row in the report. Optional fields follow the wire
-// contract: digest when resolved; reason only on skipped; error only on
+// contract: digest when resolved; reason on skipped or blocked; error only on
 // failed; referrers only when includeReferrers surfaced any; verification only
-// when a signature was confirmed.
+// when a signature was confirmed; steps only when hooks ran.
 type TagResult struct {
 	// Tag is the tag name.
 	Tag string `json:"tag"`
@@ -153,7 +157,7 @@ type TagResult struct {
 	// +optional
 	Digest string `json:"digest,omitempty"`
 
-	// Reason explains a skip (up-to-date or signature-too-new).
+	// Reason explains a skip or names the hook that blocked the tag.
 	// +optional
 	Reason string `json:"reason,omitempty"`
 
@@ -168,7 +172,59 @@ type TagResult struct {
 	// Verification carries the signature verification metadata, when confirmed.
 	// +optional
 	Verification *Verification `json:"verification,omitempty"`
+
+	// Steps lists the hook steps that ran for this tag, in execution order.
+	// +optional
+	Steps []StepResult `json:"steps,omitempty"`
 }
+
+// StepResult records the outcome of one hook step.
+type StepResult struct {
+	// Name is the configured step name.
+	Name string `json:"name"`
+
+	// Provider identifies the hook implementation.
+	Provider string `json:"provider"`
+
+	// Verdict is the step outcome.
+	// +kubebuilder:validation:Enum=allow;deny;skip;error
+	Verdict StepVerdict `json:"verdict"`
+
+	// Reason explains a deny or skip verdict.
+	// +optional
+	Reason string `json:"reason,omitempty"`
+
+	// Error carries an infrastructure error after retries.
+	// +optional
+	Error string `json:"error,omitempty"`
+
+	// Attempts is the number of times the step ran.
+	// +kubebuilder:validation:Minimum=0
+	Attempts int `json:"attempts"`
+
+	// Duration is the total step time, including retries.
+	Duration string `json:"duration"`
+
+	// Cosign carries the verified signature metadata when the provider is
+	// cosign and the signature passed.
+	// +optional
+	Cosign *Verification `json:"cosign,omitempty"`
+}
+
+// StepVerdict is the result returned by a hook provider.
+type StepVerdict string
+
+const (
+	// StepVerdictAllow permits the tag to continue through the mirror pipeline.
+	StepVerdictAllow StepVerdict = "allow"
+	// StepVerdictDeny blocks the tag as a policy rejection.
+	StepVerdictDeny StepVerdict = "deny"
+	// StepVerdictSkip skips the tag without treating it as blocked.
+	StepVerdictSkip StepVerdict = "skip"
+	// StepVerdictError records an infrastructure error, optionally allowing
+	// the pipeline to continue when onFailure is "warn".
+	StepVerdictError StepVerdict = "error"
+)
 
 // ReferrerResult is one mirrored referrer (cosign signature bundle, SBOM,
 // attestation) of a tag. It reuses the per-tag Status enum; Reason is set to
@@ -221,7 +277,7 @@ type Verification struct {
 
 // Status is the result of one mirror job, or runner-assigned on failure.
 //
-// +kubebuilder:validation:Enum=copied;overwritten;skipped;drifted;would-copy;would-overwrite;failed
+// +kubebuilder:validation:Enum=copied;overwritten;skipped;drifted;would-copy;would-overwrite;blocked;failed
 type Status string
 
 const (
@@ -240,6 +296,8 @@ const (
 	// StatusWouldOverwrite is the dry-run forecast for a tag that would be
 	// overwritten.
 	StatusWouldOverwrite Status = "would-overwrite"
+	// StatusBlocked means a hook policy rejected the tag before copying.
+	StatusBlocked Status = "blocked"
 	// StatusFailed marks a failed mirror. The runner assigns it as a job's own
 	// status when the job errors (or carries a Job.PlanError); a job never
 	// returns it as a result status, so it is excluded from validStatuses.
@@ -264,6 +322,7 @@ var validStatuses = map[Status]struct{}{
 	StatusDrifted:        {},
 	StatusWouldCopy:      {},
 	StatusWouldOverwrite: {},
+	StatusBlocked:        {},
 }
 
 // Valid reports whether s is one of the documented job-returnable statuses.

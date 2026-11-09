@@ -59,11 +59,21 @@ type Job struct {
 	// records it as a StatusFailed row carrying this error and invokes neither
 	// Run nor any retry budget — Run is ignored when PlanError is set.
 	PlanError error
+	// Gate, when non-nil, runs before the copy phase and outside the per-job
+	// timeout/retry budget. It may return a terminal outcome that prevents Run.
+	Gate func(ctx context.Context) (GateResult, error)
 	// Run performs the work. Must be safe to invoke multiple times — the
 	// runner may retry on transient errors. crane.Copy is content-addressed
 	// and idempotent at the blob level, so retrying a partially-copied tag
 	// does not corrupt anything.
 	Run func(ctx context.Context) (JobResult, error)
+}
+
+// GateResult carries step results and an optional terminal outcome.
+type GateResult struct {
+	Terminal *JobResult
+	Steps    []apiv1.StepResult
+	Digest   string
 }
 
 // JobResult is the successful result of one Job.Run. It carries the per-tag
@@ -77,10 +87,11 @@ type JobResult struct {
 	// Digest is the source artifact digest, when the job resolved it. Present
 	// for every status whose path computed it (including the too-new skip).
 	Digest string
-	// Reason explains a skip (up-to-date or signature-too-new). Set only when
-	// Status is StatusSkipped; empty otherwise.
+	// Reason explains a skip or identifies the hook that blocked a tag.
 	Reason string
 	// Referrers lists the mirrored sub-artifacts (signatures, SBOMs,
 	// attestations), in snapshot order. Empty unless includeReferrers is set.
 	Referrers []apiv1.ReferrerResult
+	// Steps lists hook outcomes from the pre-copy gate.
+	Steps []apiv1.StepResult
 }

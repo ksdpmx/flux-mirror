@@ -572,6 +572,58 @@ func validateArtifactEntry(a apiv1.ArtifactEntry) error {
 			return fmt.Errorf("verify: %w", err)
 		}
 	}
+	if a.Hooks != nil {
+		if a.Verify != nil && len(a.Hooks.Pre) > 0 {
+			return fmt.Errorf("verify and hooks.pre cannot both be set")
+		}
+		if err := validateArtifactHooks(*a.Hooks); err != nil {
+			return fmt.Errorf("hooks: %w", err)
+		}
+	}
+	return nil
+}
+
+var hookNamePattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+
+func validateArtifactHooks(hooks apiv1.ArtifactHooks) error {
+	seen := make(map[string]struct{}, len(hooks.Pre))
+	for i, step := range hooks.Pre {
+		if !hookNamePattern.MatchString(step.Name) {
+			return fmt.Errorf("pre[%d].name %q must be a lowercase identifier", i, step.Name)
+		}
+		if _, ok := seen[step.Name]; ok {
+			return fmt.Errorf("pre[%d].name %q is duplicated", i, step.Name)
+		}
+		seen[step.Name] = struct{}{}
+		if step.Provider != apiv1.HookProviderCosign {
+			return fmt.Errorf("pre[%d].provider %q must be %q", i, step.Provider, apiv1.HookProviderCosign)
+		}
+		if step.Timeout != nil && step.Timeout.Duration <= 0 {
+			return fmt.Errorf("pre[%d].timeout must be greater than 0", i)
+		}
+		if step.Concurrency != nil && *step.Concurrency < 1 {
+			return fmt.Errorf("pre[%d].concurrency must be at least 1", i)
+		}
+		if step.Retries != nil && *step.Retries < 0 {
+			return fmt.Errorf("pre[%d].retries must be at least 0", i)
+		}
+		switch step.OnFailure {
+		case "", apiv1.HookFailureBlock, apiv1.HookFailureWarn:
+		default:
+			return fmt.Errorf("pre[%d].onFailure %q must be %q or %q",
+				i, step.OnFailure, apiv1.HookFailureBlock, apiv1.HookFailureWarn)
+		}
+		if step.Cosign == nil {
+			return fmt.Errorf("pre[%d].cosign is required for provider %q", i, step.Provider)
+		}
+		verification := apiv1.ArtifactVerification{
+			Provider:          apiv1.VerifyProviderCosign,
+			MatchOIDCIdentity: step.Cosign.MatchOIDCIdentity,
+		}
+		if err := validateVerification(verification); err != nil {
+			return fmt.Errorf("pre[%d].cosign: %w", i, err)
+		}
+	}
 	return nil
 }
 

@@ -98,10 +98,11 @@ hosts are not supported.
 |---------------------------------|---------|------------------------------------------------------------------------------------------------------------------------------------|
 | `-o, --output text\|yaml\|json` | `text`  | Output format. `text` is human-friendly; `yaml` and `json` print the structured [sync report](report.md) to stdout.       |
 | `--concurrency N`               | `4`     | Maximum number of copy and tag-planning operations to run in parallel. Must be greater than `0`.                                   |
-| `--retries N`                   | `3`     | Maximum number of retry attempts per job, within the `--timeout` budget. Must be greater than or equal to `0`.                     |
-| `--timeout DURATION`            | `5m`    | Per-job total budget covering all retry attempts. Must be greater than `0`.                                                         |
+| `--retries N`                   | `3`     | Maximum number of copy retry attempts per job, within the `--timeout` budget. Hook steps use their own `retries`. Must be greater than or equal to `0`. |
+| `--timeout DURATION`            | `5m`    | Per-job copy budget covering all retry attempts; also the default timeout for hook steps. Must be greater than `0`.                 |
 | `--overwrite`                   | `false` | Force `overwrite: true` on every entry, regardless of per-entry config. See [Overwrite and drift behavior](config.md#overwrite-and-drift-behavior). |
 | `--drift-exit-code N`           | `2`     | Exit code to use when drift is detected without failures (0–255). Set to `0` for immutable destinations that should not fail CI on drift. Drift on entries with `ignoreDriftForExitCode: true` does not trigger it. |
+| `--blocked-exit-code N`         | `3`     | Exit code to use when hook policies block tags without failures (0–255). Set to `0` for report-only rollout.                         |
 | `--dry-run`                     | `false` | Run the plan and comparison pipeline without performing any writes. Reported as `would-copy` / `would-overwrite`.                   |
 | `--verbose`                     | `false` | Log every operation and the involved digests on stderr. Suppresses the spinner.                                                     |
 | `--no-progress`                 | `false` | Disable the live progress spinner. Per-job lines and the summary still print.                                                       |
@@ -175,6 +176,7 @@ Each tag row (and each referrer row) lands in exactly one of these statuses:
 | `drifted`         | Destination has a different digest, `overwrite: false` — left alone, surfaced in the summary. |
 | `would-copy`      | Dry-run forecast: would have been copied.                                                     |
 | `would-overwrite` | Dry-run forecast: would have been overwritten.                                                |
+| `blocked`         | A pre-copy hook rejected the tag; the row's `reason` names the step.                          |
 | `failed`          | The operation errored; the row's `error` carries the message.                                 |
 
 A `skipped` row's `reason` is either `up-to-date` (the destination already has
@@ -196,6 +198,19 @@ array — one row per mirrored sub-artifact (cosign signature bundle, SBOM,
 attestation), each with its own `digest`, `artifactType`, `status`, and (when
 skipped) `reason`. Referrers are evaluated under `--dry-run` too.
 
+## Pre-copy hooks
+
+For `artifacts[].hooks.pre`, the runner compares source and destination first,
+then executes the hook chain only for tags that will be copied. Up-to-date and
+drifted tags, plus all tags under `--dry-run`, do not run hooks. Hook steps have
+their own timeout, concurrency, and retries; the copy's `--timeout` and
+`--retries` budget applies only after the gate allows it.
+
+A policy denial produces a `blocked` tag. An exhausted infrastructure error
+fails the tag by default; `onFailure: warn` records the error and continues to
+the copy. Failures take precedence over blocked tags, and blocked tags take
+precedence over drift when classifying the run.
+
 ## Exit codes
 
 | Code | Meaning                                                                                                                |
@@ -203,11 +218,14 @@ skipped) `reason`. Referrers are evaluated under `--dry-run` too.
 | `0`  | Clean run — every tag was copied or skipped as expected, no drift, no failures.                                        |
 | `1`  | At least one tag job failed (network error, push rejected, retries exhausted, plan failure).                           |
 | `2`  | No failures, but at least one tag drifted with `overwrite: false`. The destination is out of date relative to source. |
+| `3`  | No failures, but at least one tag was blocked by a pre-copy hook policy.                                                |
 
-Failures take precedence over drift. `--dry-run` does not bump the exit code for
-`would-copy` / `would-overwrite`, but drift detection still produces `2` by
-default. Use `--drift-exit-code=0` when the destination registry is known to be
-immutable and drift should be logged without failing CI.
+Failures take precedence over blocked tags, which take precedence over drift.
+`--dry-run` does not bump the exit code for `would-copy` / `would-overwrite`,
+but drift detection still produces `2` by default. Use `--drift-exit-code=0`
+when the destination registry is known to be immutable and drift should be
+logged without failing CI. Use `--blocked-exit-code=0` for a report-only rollout
+of hook policies.
 
 Drift on an artifact or chart entry with
 [`ignoreDriftForExitCode: true`](config.md#overwrite-and-drift-behavior) is still logged and

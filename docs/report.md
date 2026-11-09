@@ -54,7 +54,8 @@ stable key set.
 | `wouldCopy`      | Dry-run forecast: tags that would have been copied.                                          |
 | `wouldOverwrite` | Dry-run forecast: tags that would have been overwritten.                                     |
 | `failed`         | Total failures: tag-level failures plus plan-failed entries.                                 |
-| `exitCode`       | Semantic exit code: `0` clean, `1` failures, `2` drift. Drift on entries with `ignoreDriftForExitCode: true` is excluded. Not affected by `--drift-exit-code`. |
+| `blocked`        | Total tags rejected by a hook policy.                                                       |
+| `exitCode`       | Semantic exit code: `0` clean, `1` failures, `2` drift, `3` blocked. Drift on entries with `ignoreDriftForExitCode: true` is excluded. Not affected by CLI exit-code overrides. |
 
 ## Result fields
 
@@ -84,10 +85,11 @@ problems, not an entry-level failure.
 | `tag`          | Tag name (artifacts) or chart version (charts).                                                 |
 | `status`       | Per-tag outcome — see [Status](#status-values).                                                 |
 | `digest`       | Source artifact digest, when resolved. Absent on a verify-failed row.                           |
-| `reason`       | Why a `skipped` tag was skipped — see [Reason](#reason-values). Present only on `skipped`.      |
+| `reason`       | Why a tag was skipped, or the hook name that blocked it.                                          |
 | `error`        | Error message. Present only when `status` is `failed`.                                          |
 | `referrers[]`  | Mirrored sub-artifacts (signatures, SBOMs, attestations). Present only with `includeReferrers`. |
 | `verification` | Signature verification metadata. Present only when a signature was confirmed (under `verify:`). |
+| `steps[]`      | Hook step results, in execution order; omitted when no hook ran.                                |
 
 ### Status values
 
@@ -99,11 +101,13 @@ problems, not an entry-level failure.
 | `drifted`         | Destination has a different digest, `overwrite: false` — left alone. |
 | `would-copy`      | Dry-run: would have been copied.                                     |
 | `would-overwrite` | Dry-run: would have been overwritten.                                |
+| `blocked`         | A hook policy rejected the tag before copying.                       |
 | `failed`          | The operation errored; see `error`.                                  |
 
 ### Reason values
 
-`reason` is always present on a `skipped` status (tag or referrer) and absent otherwise.
+For a `skipped` status, `reason` is always present and uses the values below.
+For a `blocked` tag, `reason` is the hook step name.
 
 | Reason              | Meaning                                                                       |
 |---------------------|-------------------------------------------------------------------------------|
@@ -140,6 +144,28 @@ Present only when a signature was confirmed (the entry has a `verify:` block). O
 | `integratedTime` | Transparency-log integration time (RFC 3339). Present only when the bundle carries a Tlog timestamp. |
 | `age`            | Signature age, as a Go duration string. Present only on a `signature-too-new` skip.                  |
 | `minAge`         | Configured `verify.minAge`, as a Go duration string. Present only on a `signature-too-new` skip.     |
+
+## Hook step fields
+
+Each `steps[]` row records one pre-copy hook: `name`, `provider`, `verdict`
+(`allow`, `deny`, `skip`, or `error`), `attempts`, and `duration`. `reason` is
+present for a deny or skip; `error` is present when the step exhausted its
+infrastructure retries. A cosign step includes its confirmed signature
+metadata in the typed `cosign` object. A denied tag has `status: "blocked"` and
+its tag-level `reason` is the step name; provider details remain in `steps[]`.
+Errors with `onFailure: block` produce a failed tag, while `onFailure: warn`
+records the error and lets mirroring continue.
+
+| Key        | Description                                                        |
+|------------|--------------------------------------------------------------------|
+| `name`     | Configured step name.                                              |
+| `provider` | Hook provider, such as `cosign`.                                   |
+| `verdict`  | `allow`, `deny`, `skip`, or `error`.                                |
+| `reason`   | Provider explanation for a deny or skip.                           |
+| `error`    | Infrastructure error after retries.                                |
+| `attempts` | Number of attempts made.                                           |
+| `duration` | Total step time, including retries, as a Go duration string.       |
+| `cosign`   | Verified signature metadata for a passing cosign step, when set.   |
 
 A verify *failure* (bad/missing signature, OIDC mismatch) is not a `verification` block:
 it surfaces as a `status: "failed"` tag row carrying the verify `error`, with no
@@ -182,6 +208,7 @@ second entry failed at plan time because the source repository does not exist.
       "wouldCopy": 0,
       "wouldOverwrite": 0,
       "failed": 1,
+      "blocked": 0,
       "exitCode": 1
     },
     "results": [

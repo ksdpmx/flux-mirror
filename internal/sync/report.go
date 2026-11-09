@@ -43,6 +43,7 @@ func NewReport(reporter string, timestamp time.Time, r Result) apiv1.Report {
 				WouldCopy:      counts[apiv1.StatusWouldCopy],
 				WouldOverwrite: counts[apiv1.StatusWouldOverwrite],
 				Failed:         r.TotalFailures(),
+				Blocked:        r.TotalBlocked(),
 				ExitCode:       r.ExitCode(),
 			},
 			Results: results,

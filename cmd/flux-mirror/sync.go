@@ -33,7 +33,9 @@ const (
 	envConfig                  = "FLUX_MIRROR_CONFIG"
 	syncDefaultTimeout         = 5 * time.Minute
 	syncDefaultDriftExitCode   = 2
+	syncDefaultBlockedExitCode = 3
 	syncMaxCustomDriftExitCode = 255
+	syncMaxCustomBlockExitCode = 255
 	// tokenCacheDefaultMaxSize matches the Flux controllers' default for the
 	// provider token cache.
 	tokenCacheDefaultMaxSize = 100
@@ -53,9 +55,11 @@ Exit codes:
   0  clean run (everything copied/skipped as expected)
   1  at least one tag job failed
   2  no failures, but at least one tag drifted (overwrite=false)
+  3  no failures, but at least one tag was blocked by a hook
 
 Use --drift-exit-code=0 to keep drift-only runs green in CI when the
-destination registry is known to be immutable.`,
+destination registry is known to be immutable. Use --blocked-exit-code=0
+to report blocked tags without failing the run.`,
 	Example: `  # Run a sync against a config file
   flux-mirror sync flux-mirror.yaml
 
@@ -81,6 +85,7 @@ type syncFlags struct {
 	retries           int
 	overwrite         bool
 	driftExitCode     int
+	blockedExitCode   int
 	dryRun            bool
 	verbose           bool
 	insecure          bool
@@ -89,11 +94,12 @@ type syncFlags struct {
 }
 
 var syncArgs = syncFlags{
-	output:        "text",
-	concurrency:   4,
-	timeout:       syncDefaultTimeout,
-	retries:       3,
-	driftExitCode: syncDefaultDriftExitCode,
+	output:          "text",
+	concurrency:     4,
+	timeout:         syncDefaultTimeout,
+	retries:         3,
+	driftExitCode:   syncDefaultDriftExitCode,
+	blockedExitCode: syncDefaultBlockedExitCode,
 	tokenCacheOptions: pkgcache.TokenFlags{
 		MaxSize:     tokenCacheDefaultMaxSize,
 		MaxDuration: pkgcache.TokenMaxDuration,
@@ -112,6 +118,8 @@ func init() {
 		"Force overwrite when the destination artifact digest has drifted")
 	syncCmd.Flags().IntVar(&syncArgs.driftExitCode, "drift-exit-code", syncArgs.driftExitCode,
 		"Exit code to use when drift is detected without failures")
+	syncCmd.Flags().IntVar(&syncArgs.blockedExitCode, "blocked-exit-code", syncArgs.blockedExitCode,
+		"Exit code to use when tags are blocked without failures")
 	syncCmd.Flags().BoolVar(&syncArgs.dryRun, "dry-run", false,
 		"Run the plan and comparison pipeline without performing any writes.")
 	syncCmd.Flags().BoolVar(&syncArgs.verbose, "verbose", false,
@@ -248,6 +256,8 @@ func syncCmdRun(cmd *cobra.Command, args []string) error {
 			Verbose:         syncArgs.verbose,
 			CopyJobs:        syncArgs.concurrency,
 			PlanConcurrency: syncArgs.concurrency,
+			HookTimeout:     timeout,
+			GateTimeout:     timeout,
 			Logger:          logger,
 			Hosts:           registryauth.HostsForDirection(cfg.Hosts, apiv1.DirectionDestination),
 			Transport:       destTransport,
@@ -312,7 +322,7 @@ func syncCmdRun(cmd *cobra.Command, args []string) error {
 			return err
 		}
 	}
-	return classifyExit(res, syncArgs.driftExitCode)
+	return classifyExit(res, syncArgs.driftExitCode, syncArgs.blockedExitCode)
 }
 
 func validateSyncArgs(timeout time.Duration) error {
@@ -327,6 +337,9 @@ func validateSyncArgs(timeout time.Duration) error {
 	}
 	if syncArgs.driftExitCode < 0 || syncArgs.driftExitCode > syncMaxCustomDriftExitCode {
 		return fmt.Errorf("--drift-exit-code must be between 0 and %d", syncMaxCustomDriftExitCode)
+	}
+	if syncArgs.blockedExitCode < 0 || syncArgs.blockedExitCode > syncMaxCustomBlockExitCode {
+		return fmt.Errorf("--blocked-exit-code must be between 0 and %d", syncMaxCustomBlockExitCode)
 	}
 	return nil
 }
@@ -351,13 +364,16 @@ type syncExitError struct {
 func (e *syncExitError) Error() string { return e.msg }
 func (e *syncExitError) ExitCode() int { return e.code }
 
-func classifyExit(r sync.Result, driftExitCode int) error {
+func classifyExit(r sync.Result, driftExitCode, blockedExitCode int) error {
 	// Non-zero exit codes carry an empty message — failures and drift are
 	// already surfaced inline (per-failure ✗ lines) and in the Summary
 	// totals; printing a third "N failed" footer just adds noise.
 	code := r.ExitCode()
 	if code == syncDefaultDriftExitCode && r.HasDriftForExitCode() && !r.HasFailures() {
 		code = driftExitCode
+	}
+	if code == syncDefaultBlockedExitCode && r.HasBlocked() && !r.HasFailures() {
+		code = blockedExitCode
 	}
 	switch code {
 	case 0:
