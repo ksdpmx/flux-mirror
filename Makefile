@@ -124,7 +124,7 @@ registry-up: ## Start a local OCI registry (registry:3) on host port 5050.
 		echo "Registry $(REGISTRY_NAME) already exists; restarting clean."; \
 		docker rm -f $(REGISTRY_NAME) >/dev/null; \
 	fi
-	docker run -d --rm --name $(REGISTRY_NAME) -p $(REGISTRY_PORT):5000 \
+	docker run --rm --name $(REGISTRY_NAME) -p $(REGISTRY_PORT):5000 \
 		-e REGISTRY_STORAGE_DELETE_ENABLED=true registry:3
 	@echo "Registry up at localhost:$(REGISTRY_PORT)"
 

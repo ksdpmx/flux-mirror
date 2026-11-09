@@ -4,8 +4,11 @@
 package hooks
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -174,4 +177,74 @@ func TestRunner_StepWithoutUnitsIsAnError(t *testing.T) {
 
 	_, err = runner.Run(context.Background(), Input{})
 	g.Expect(err).To(MatchError(ContainSubstring("no work units")))
+}
+
+func logOutput(t *testing.T, config apiv1.ArtifactHooks, step Step, input Input) string {
+	t.Helper()
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	runner, err := NewRunner(config, time.Minute, buildSteps(step), WithLogger(logger))
+	NewWithT(t).Expect(err).ToNot(HaveOccurred())
+	_, _ = runner.Run(context.Background(), input)
+	return buf.String()
+}
+
+func TestRunner_LogsNamedUnitsAndDeny(t *testing.T) {
+	g := NewWithT(t)
+	step := unitsStep{
+		verdictUnit("linux/amd64", allowOutcome(), nil),
+		verdictUnit("linux/arm64", Outcome{
+			Verdict: apiv1.StepVerdictDeny,
+			Reason:  "policy",
+			Wizcli:  &apiv1.WizcliResult{ScanID: "scan-1", FailedPolicies: []string{"EOL", "CVE"}},
+		}, nil),
+	}
+
+	out := logOutput(t, hookConfigs(1), step, Input{Source: "docker.io/library/alpine", Tag: "3.20"})
+
+	g.Expect(out).To(ContainSubstring(`msg="hooks started"`))
+	g.Expect(out).To(ContainSubstring("source=docker.io/library/alpine tag=3.20"))
+	g.Expect(out).To(ContainSubstring(`msg="hook step started"`))
+	g.Expect(out).To(ContainSubstring("step=step-0 provider=provider-0"))
+	g.Expect(strings.Count(out, `msg="hook unit started"`)).To(Equal(2))
+	g.Expect(out).To(ContainSubstring("unit=linux/arm64"))
+	g.Expect(out).To(ContainSubstring("scanId=scan-1"))
+	g.Expect(out).To(ContainSubstring("failedPolicies=EOL,CVE"))
+	g.Expect(out).To(ContainSubstring(`msg="hook step finished"`))
+	g.Expect(out).To(ContainSubstring(`msg="hook denied tag"`))
+}
+
+func TestRunner_LogsSingleUnitStepWithoutUnitLines(t *testing.T) {
+	g := NewWithT(t)
+	step := stepFunc(func(context.Context, Input) (Outcome, error) {
+		return Outcome{Verdict: apiv1.StepVerdictAllow}, nil
+	})
+
+	out := logOutput(t, hookConfigs(1), step, Input{Tag: "1.0"})
+
+	g.Expect(out).To(ContainSubstring(`msg="hook step finished"`))
+	g.Expect(out).ToNot(ContainSubstring("hook unit"))
+}
+
+func TestRunner_LogsRetriesAndFailures(t *testing.T) {
+	g := NewWithT(t)
+	retries := 1
+	config := hookConfigs(1)
+	config.Pre[0].Retries = &retries
+	step := unitsStep{verdictUnit("linux/amd64", Outcome{}, errors.New("transient"))}
+
+	out := logOutput(t, config, step, Input{Tag: "1.0"})
+
+	g.Expect(out).To(ContainSubstring(`msg="hook attempt failed; retrying"`))
+	g.Expect(out).To(ContainSubstring(`msg="hook unit failed"`))
+	g.Expect(out).To(ContainSubstring(`msg="hook step failed"`))
+}
+
+func TestRunner_LogsNothingWithoutLogger(t *testing.T) {
+	g := NewWithT(t)
+	runner, err := NewRunner(hookConfigs(1), time.Minute, buildSteps(unitsStep{verdictUnit("a", allowOutcome(), nil)}))
+	g.Expect(err).ToNot(HaveOccurred())
+
+	_, err = runner.Run(context.Background(), Input{})
+	g.Expect(err).ToNot(HaveOccurred())
 }

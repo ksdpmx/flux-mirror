@@ -415,7 +415,7 @@ func (m *mirror) buildHookRunner() error {
 			apiv1.HookProviderWizcli: hooks.WizcliBuilder(m.client),
 		}
 	}
-	hookRunner, err := hooks.NewRunner(*m.entry.Hooks, m.opts.HookTimeout, builders)
+	hookRunner, err := hooks.NewRunner(*m.entry.Hooks, m.opts.HookTimeout, builders, hooks.WithLogger(m.opts.Logger))
 	if err != nil {
 		return err
 	}

@@ -6,12 +6,14 @@ package main
 import (
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/briandowns/spinner"
 
 	apiv1 "github.com/fluxcd/flux-mirror/api/v1beta2"
+	mirrorsync "github.com/fluxcd/flux-mirror/internal/sync"
 )
 
 // progress drives a single global spinner (on stderr) plus per-job
@@ -46,7 +48,7 @@ func newProgress(out, ttyOut io.Writer, totalEntries int) *progress {
 
 // JobFinished is the OnJobFinished hook for sync.Runner. Safe for
 // concurrent invocation.
-func (p *progress) JobFinished(entry, id, dst string, st apiv1.Status, err error) {
+func (p *progress) JobFinished(entry, id, dst string, res mirrorsync.JobResult, err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if err != nil {
@@ -56,10 +58,51 @@ func (p *progress) JobFinished(entry, id, dst string, st apiv1.Status, err error
 		}
 		return
 	}
-	p.emitLocked("✓ %s:%s (%s)\n", entry, id, st)
+	if res.Status == apiv1.StatusBlocked {
+		// A blocked tag was not copied, so no destination line.
+		p.emitLocked("✗ %s:%s (blocked by %s)\n", entry, id, blockedDetail(res))
+		return
+	}
+	p.emitLocked("✓ %s:%s (%s)\n", entry, id, res.Status)
 	if dst != "" {
 		p.emitLocked("→ %s\n", dst)
 	}
+}
+
+// blockedDetail names the hook step that blocked a tag and why: the failed
+// Wiz policies when a wizcli unit reported them, otherwise the step's own
+// reason. Reason holds the step name for a blocked tag.
+func blockedDetail(res mirrorsync.JobResult) string {
+	var step *apiv1.StepResult
+	for i := range res.Steps {
+		if res.Steps[i].Name == res.Reason {
+			step = &res.Steps[i]
+			break
+		}
+	}
+	if step == nil {
+		return res.Reason
+	}
+	var policies []string
+	seen := map[string]bool{}
+	for _, unit := range step.Units {
+		if unit.Wizcli == nil {
+			continue
+		}
+		for _, policy := range unit.Wizcli.FailedPolicies {
+			if !seen[policy] {
+				seen[policy] = true
+				policies = append(policies, policy)
+			}
+		}
+	}
+	switch {
+	case len(policies) > 0:
+		return res.Reason + ": " + strings.Join(policies, ", ")
+	case step.Reason != "":
+		return res.Reason + ": " + step.Reason
+	}
+	return res.Reason
 }
 
 // EntryFinished is the OnEntryFinished hook for sync.Runner. Called once

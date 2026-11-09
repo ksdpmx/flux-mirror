@@ -29,8 +29,9 @@ type Runner struct {
 	// It runs from the worker goroutine (so concurrent invocations are
 	// possible — the callback must be safe to call from multiple goroutines)
 	// before the per-tag row is recorded, but after retries and status
-	// validation. Used by the cmd layer to drive a progress spinner.
-	OnJobFinished func(entry, id, dst string, st apiv1.Status, err error)
+	// validation. When err is set, res may carry only the hook steps and
+	// digest. Used by the cmd layer to drive a progress spinner.
+	OnJobFinished func(entry, id, dst string, res JobResult, err error)
 
 	// OnEntryFinished, if non-nil, is invoked from the main goroutine once
 	// per entry, after all of that entry's jobs have completed (or its plan
@@ -189,7 +190,7 @@ func (r *Runner) runEntry(ctx context.Context, m EntryMirror) (apiv1.EntryResult
 				}
 			}
 			if r.OnJobFinished != nil {
-				r.OnJobFinished(plan.Source, job.ID, job.Dst, res.Status, err)
+				r.OnJobFinished(plan.Source, job.ID, job.Dst, res, err)
 			}
 			record(i, job, res, err)
 			// Never propagate the error — failures are recorded per-tag and

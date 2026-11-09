@@ -121,9 +121,15 @@ Global flags: `--timeout` sets the default operation timeout, and `--no-envsubst
 → localhost:5050/charts/podinfo:6.10.2
 ✓ ghcr.io/stefanprodan/charts/podinfo:6.11.0 (copied)
 → localhost:5050/charts/podinfo:6.11.0
+✗ docker.io/library/alpine:3.20 (blocked by vuln-scan: LNLP Block End of Life)
 ✗ ghcr.io/stefanprodan/charts/podinfo2 — plan failed: NAME_UNKNOWN
-Summary: 1 copied, 1 skipped, 1 failed in 4.2s.
+Summary: 1 copied, 1 skipped, 1 blocked, 1 failed in 4.2s.
 ```
+
+A tag blocked by a [pre-copy hook](config.md#pre-copy-hooks) prints the step that
+rejected it and, for `wizcli`, the policies that failed. It has no destination
+line because nothing was copied. The hook progress itself is only logged with
+`--verbose`.
 
 ### Verbose mode
 
@@ -132,12 +138,25 @@ stderr — every layer push, blob check, manifest digest, referrer fallback-tag
 update, and registry-side warning. Reach for it when diagnosing TLS, auth,
 missing-blob, or push-rejection issues.
 
+When an entry has [`hooks.pre`](config.md#pre-copy-hooks), the log also shows
+each hook run: `hooks started`, `hook step started`/`finished`, a `hook unit
+started`/`finished` pair per work unit (for `wizcli`, one per platform, with
+the `scanId` and the `failedPolicies` of a deny), `hook attempt failed;
+retrying`, and `hook denied tag`. A tag spends the time between the source
+and destination comparison and `mirroring tag` in these steps, so these lines
+show whether a scan is still running.
+
 ```
 2026/05/13 09:00:00 sync started entries=3 concurrency=4 retries=3 timeout=5m0s
-2026/05/13 09:00:00 mirroring tag src=ghcr.io/foo/bar:1.0 dst=localhost:5050/bar:1.0
-2026/05/13 09:00:00 Copying from ghcr.io/foo/bar:1.0 to localhost:5050/bar:1.0
-2026/05/13 09:00:00 pushed blob: sha256:fdf53ef8e04176eedbd42713efb2d002f1741c310627b38f444c6f6d92a598f7
-2026/05/13 09:00:01 tag done src=ghcr.io/foo/bar:1.0 status=copied elapsed=812ms
+2026/05/13 09:00:00 hooks started source=docker.io/library/alpine tag=3.24.3 steps=1
+2026/05/13 09:00:00 hook step started source=docker.io/library/alpine tag=3.24.3 step=vuln-scan provider=wizcli units=1 concurrency=1 timeout=5m0s
+2026/05/13 09:00:00 hook unit started source=docker.io/library/alpine tag=3.24.3 step=vuln-scan provider=wizcli unit=linux/amd64 attempt=1
+2026/05/13 09:00:40 hook unit finished source=docker.io/library/alpine tag=3.24.3 step=vuln-scan provider=wizcli unit=linux/amd64 attempts=1 elapsed=40.1s verdict=allow scanId=…
+2026/05/13 09:00:40 hook step finished source=docker.io/library/alpine tag=3.24.3 step=vuln-scan provider=wizcli verdict=allow elapsed=40.2s
+2026/05/13 09:00:40 mirroring tag src=docker.io/library/alpine:3.24.3 dst=localhost:5050/alpine:3.24.3
+2026/05/13 09:00:40 Copying from docker.io/library/alpine:3.24.3 to localhost:5050/alpine:3.24.3
+2026/05/13 09:00:40 pushed blob: sha256:fdf53ef8e04176eedbd42713efb2d002f1741c310627b38f444c6f6d92a598f7
+2026/05/13 09:00:41 tag done src=docker.io/library/alpine:3.24.3 status=copied elapsed=812ms
 …
 2026/05/13 09:00:04 sync complete entries=3 copied=1 overwritten=0 skipped=1 drifted=0 failed=1 duration=4.213s
 ```

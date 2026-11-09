@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -82,16 +83,36 @@ type stepRunner struct {
 
 // Runner runs an ordered chain of hook steps.
 type Runner struct {
-	steps []stepRunner
+	steps  []stepRunner
+	logger *slog.Logger
+}
+
+// Option configures a Runner.
+type Option func(*Runner)
+
+// WithLogger sets the logger for step and unit progress. Without it the
+// runner logs nothing.
+func WithLogger(logger *slog.Logger) Option {
+	return func(r *Runner) {
+		if logger != nil {
+			r.logger = logger
+		}
+	}
 }
 
 // NewRunner builds the configured providers once and creates per-step
 // concurrency limits shared by all tags in the entry.
-func NewRunner(config apiv1.ArtifactHooks, defaultTimeout time.Duration, builders map[string]Builder) (*Runner, error) {
+func NewRunner(config apiv1.ArtifactHooks, defaultTimeout time.Duration, builders map[string]Builder, opts ...Option) (*Runner, error) {
 	if defaultTimeout <= 0 {
 		return nil, fmt.Errorf("default hook timeout must be greater than 0")
 	}
-	r := &Runner{steps: make([]stepRunner, 0, len(config.Pre))}
+	r := &Runner{
+		steps:  make([]stepRunner, 0, len(config.Pre)),
+		logger: slog.New(slog.DiscardHandler),
+	}
+	for _, opt := range opts {
+		opt(r)
+	}
 	for i, cfg := range config.Pre {
 		builder, ok := builders[cfg.Provider]
 		if !ok {
@@ -136,10 +157,12 @@ func NewRunner(config apiv1.ArtifactHooks, defaultTimeout time.Duration, builder
 // Infrastructure errors are retried; onFailure decides whether an exhausted
 // error blocks the tag or allows later steps to run.
 func (r *Runner) Run(ctx context.Context, input Input) (Result, error) {
+	log := r.logger.With("source", input.Source, "tag", input.Tag)
+	log.Info("hooks started", "steps", len(r.steps))
 	result := Result{Steps: make([]apiv1.StepResult, 0, len(r.steps))}
 	for i := range r.steps {
 		step := &r.steps[i]
-		outcome, stepResult, err := step.run(ctx, input)
+		outcome, stepResult, err := step.run(ctx, input, log)
 		if err != nil {
 			stepResult.Verdict = apiv1.StepVerdictError
 			stepResult.Error = err.Error()
@@ -147,6 +170,7 @@ func (r *Runner) Run(ctx context.Context, input Input) (Result, error) {
 			if step.onFailure == apiv1.HookFailureBlock {
 				return result, fmt.Errorf("hook %s: %w", step.config.Name, err)
 			}
+			log.Warn("hook failed; continuing because onFailure is warn", "step", step.config.Name)
 			continue
 		}
 
@@ -159,6 +183,7 @@ func (r *Runner) Run(ctx context.Context, input Input) (Result, error) {
 		case apiv1.StepVerdictAllow:
 			continue
 		case apiv1.StepVerdictDeny:
+			log.Info("hook denied tag", "step", step.config.Name, "reason", outcome.Reason)
 			result.Terminal = &Terminal{
 				Status: apiv1.StatusBlocked,
 				Reason: step.config.Name,
@@ -166,6 +191,7 @@ func (r *Runner) Run(ctx context.Context, input Input) (Result, error) {
 			}
 			return result, nil
 		case apiv1.StepVerdictSkip:
+			log.Info("hook skipped tag", "step", step.config.Name, "reason", outcome.Reason)
 			result.Terminal = &Terminal{
 				Status: apiv1.StatusSkipped,
 				Reason: outcome.Reason,
@@ -192,10 +218,11 @@ type unitRun struct {
 	duration time.Duration
 }
 
-func (s *stepRunner) run(parent context.Context, input Input) (Outcome, apiv1.StepResult, error) {
+func (s *stepRunner) run(parent context.Context, input Input, log *slog.Logger) (Outcome, apiv1.StepResult, error) {
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(parent, s.timeout)
 	defer cancel()
+	log = log.With("step", s.config.Name, "provider", s.config.Provider)
 
 	stepResult := apiv1.StepResult{
 		Name:     s.config.Name,
@@ -207,8 +234,11 @@ func (s *stepRunner) run(parent context.Context, input Input) (Outcome, apiv1.St
 	}
 	if err != nil {
 		stepResult.Duration = time.Since(start).String()
+		log.Warn("hook step failed", "error", err, "elapsed", time.Since(start).Round(time.Millisecond))
 		return Outcome{}, stepResult, err
 	}
+	named := hasNamedUnits(units)
+	log.Info("hook step started", "units", len(units), "concurrency", cap(s.semaphore), "timeout", s.timeout)
 
 	runs := make([]unitRun, len(units))
 	var wg sync.WaitGroup
@@ -216,7 +246,11 @@ func (s *stepRunner) run(parent context.Context, input Input) (Outcome, apiv1.St
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			runs[i] = s.runUnit(ctx, units[i])
+			unitLog := log
+			if named {
+				unitLog = log.With("unit", unitLabel(units, i))
+			}
+			runs[i] = s.runUnit(ctx, units[i], unitLog, named)
 		}()
 	}
 	wg.Wait()
@@ -224,29 +258,38 @@ func (s *stepRunner) run(parent context.Context, input Input) (Outcome, apiv1.St
 	for _, run := range runs {
 		stepResult.Attempts += run.attempts
 	}
-	if hasNamedUnits(units) {
+	if named {
 		stepResult.Units = unitResults(units, runs)
 	}
 	stepResult.Duration = time.Since(start).String()
 	outcome, err := aggregate(units, runs)
+	elapsed := time.Since(start).Round(time.Millisecond)
+	if err != nil {
+		log.Warn("hook step failed", "error", err, "elapsed", elapsed)
+	} else {
+		log.Info("hook step finished", "verdict", outcome.Verdict, "elapsed", elapsed)
+	}
 	return outcome, stepResult, err
 }
 
 // runUnit runs one unit with the step's retries. Every attempt takes a
-// concurrency slot again, so a unit waiting to retry does not hold one.
-func (s *stepRunner) runUnit(ctx context.Context, unit Unit) unitRun {
+// concurrency slot again, so a unit waiting to retry does not hold one. The
+// logger already carries the unit name; named units get their own start and
+// finish lines because their work is slow and independent.
+func (s *stepRunner) runUnit(ctx context.Context, unit Unit, log *slog.Logger, named bool) unitRun {
 	start := time.Now()
 	var run unitRun
 	var lastErr error
 attempts:
 	for attempt := 0; attempt <= s.retries; attempt++ {
-		outcome, ran, err := s.attempt(ctx, unit)
+		outcome, ran, err := s.attempt(ctx, unit, log, named, attempt+1)
 		if ran {
 			run.attempts++
 		}
 		if err == nil {
 			run.outcome = outcome
 			run.duration = time.Since(start)
+			logUnitFinished(log, named, run)
 			return run
 		}
 		lastErr = err
@@ -256,8 +299,10 @@ attempts:
 		if attempt == s.retries {
 			break
 		}
+		backoff := retryBackoff(attempt)
+		log.Warn("hook attempt failed; retrying", "attempt", attempt+1, "error", err, "backoff", backoff)
 		select {
-		case <-time.After(retryBackoff(attempt)):
+		case <-time.After(backoff):
 		case <-ctx.Done():
 			lastErr = ctx.Err()
 			break attempts
@@ -265,10 +310,11 @@ attempts:
 	}
 	run.err = lastErr
 	run.duration = time.Since(start)
+	logUnitFinished(log, named, run)
 	return run
 }
 
-func (s *stepRunner) attempt(ctx context.Context, unit Unit) (Outcome, bool, error) {
+func (s *stepRunner) attempt(ctx context.Context, unit Unit, log *slog.Logger, named bool, number int) (Outcome, bool, error) {
 	select {
 	case s.semaphore <- struct{}{}:
 	case <-ctx.Done():
@@ -276,6 +322,9 @@ func (s *stepRunner) attempt(ctx context.Context, unit Unit) (Outcome, bool, err
 	}
 	defer func() { <-s.semaphore }()
 
+	if named {
+		log.Info("hook unit started", "attempt", number)
+	}
 	outcome, err := unit.Run(ctx)
 	if err != nil {
 		return Outcome{}, true, err
@@ -287,6 +336,32 @@ func (s *stepRunner) attempt(ctx context.Context, unit Unit) (Outcome, bool, err
 		return Outcome{}, true, Permanent(errors.New("skip verdict requires a reason"))
 	}
 	return outcome, true, nil
+}
+
+// logUnitFinished logs the result of a named unit. Only fields that identify
+// the decision are logged: the verdict, the policy names behind a deny, and
+// the scan identifier; never the provider's raw report.
+func logUnitFinished(log *slog.Logger, named bool, run unitRun) {
+	if !named {
+		return
+	}
+	attrs := []any{"attempts", run.attempts, "elapsed", run.duration.Round(time.Millisecond)}
+	if run.err != nil {
+		log.Warn("hook unit failed", append(attrs, "error", run.err)...)
+		return
+	}
+	attrs = append(attrs, "verdict", run.outcome.Verdict)
+	if w := run.outcome.Wizcli; w != nil {
+		if w.ScanID != "" {
+			attrs = append(attrs, "scanId", w.ScanID)
+		}
+		if len(w.FailedPolicies) > 0 {
+			attrs = append(attrs, "failedPolicies", strings.Join(w.FailedPolicies, ","))
+		}
+	} else if run.outcome.Reason != "" {
+		attrs = append(attrs, "reason", run.outcome.Reason)
+	}
+	log.Info("hook unit finished", attrs...)
 }
 
 func hasNamedUnits(units []Unit) bool {
