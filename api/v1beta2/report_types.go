@@ -249,6 +249,11 @@ type UnitResult struct {
 	// Wizcli carries the scan result when the provider is wizcli.
 	// +optional
 	Wizcli *WizcliResult `json:"wizcli,omitempty"`
+
+	// Cosign carries the verified signature metadata when the provider is
+	// cosign and the signature of this unit passed.
+	// +optional
+	Cosign *Verification `json:"cosign,omitempty"`
 }
 
 // WizcliResult is the part of a Wiz CLI scan result the report keeps. The

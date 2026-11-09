@@ -24,12 +24,32 @@ type fakeCosignVerifier struct {
 	err      error
 	discover oci.SignatureDiscoverer
 
+	// refs records every reference verified, in order. infoByRef and errByRef
+	// give a result per reference and take the place of info and err for it.
+	refs      []string
+	infoByRef map[string]*oci.VerificationInfo
+	errByRef  map[string]error
+
+	attestationLog   []attestationCall
 	attestationCalls int
 	attestationRef   string
 	attestationIDs   []apiv1.OIDCIdentity
 	attestationTypes []string
 	attestationOut   []string
 	attestationErr   error
+
+	platformCalls  int
+	platformRef    string
+	platformNames  []string
+	platformDigest map[string]string
+	platformErr    error
+}
+
+func (v *fakeCosignVerifier) ResolvePlatforms(_ context.Context, ref string, platforms []string) (map[string]string, error) {
+	v.platformCalls++
+	v.platformRef = ref
+	v.platformNames = platforms
+	return v.platformDigest, v.platformErr
 }
 
 func (v *fakeCosignVerifier) VerifyAttestations(
@@ -43,7 +63,13 @@ func (v *fakeCosignVerifier) VerifyAttestations(
 	v.attestationRef = ref
 	v.attestationIDs = identities
 	v.attestationTypes = required
+	v.attestationLog = append(v.attestationLog, attestationCall{ref: ref, required: required})
 	return v.attestationOut, v.attestationErr
+}
+
+type attestationCall struct {
+	ref      string
+	required []string
 }
 
 func (v *fakeCosignVerifier) VerifyWithDiscovery(
@@ -55,6 +81,13 @@ func (v *fakeCosignVerifier) VerifyWithDiscovery(
 	v.ref = ref
 	v.cfg = cfg
 	v.discover = discover
+	v.refs = append(v.refs, ref)
+	if info, ok := v.infoByRef[ref]; ok {
+		return info, v.errByRef[ref]
+	}
+	if err, ok := v.errByRef[ref]; ok {
+		return nil, err
+	}
 	return v.info, v.err
 }
 
@@ -83,10 +116,10 @@ func TestCosignStep_VerifiesPinnedDigest(t *testing.T) {
 	stepConfig := apiv1.HookStep{
 		Name:     "signature",
 		Provider: apiv1.HookProviderCosign,
-		Cosign: &apiv1.CosignHookConfig{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
+		Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
 			Issuer:  "https://token.actions.githubusercontent.com",
 			Subject: `^https://github\.com/example/.*$`,
-		}}},
+		}}}},
 	}
 	builder := CosignBuilder(verifier)
 	step, err := builder(stepConfig)
@@ -99,7 +132,7 @@ func TestCosignStep_VerifiesPinnedDigest(t *testing.T) {
 	g.Expect(verifier.ref).To(Equal("ghcr.io/example/image@sha256:abc"))
 	g.Expect(verifier.discover).ToNot(BeNil())
 	g.Expect(verifier.cfg.Provider).To(Equal(apiv1.VerifyProviderCosign))
-	g.Expect(verifier.cfg.MatchOIDCIdentity).To(Equal(stepConfig.Cosign.MatchOIDCIdentity))
+	g.Expect(verifier.cfg.MatchOIDCIdentity).To(Equal(stepConfig.Cosign.Index.MatchOIDCIdentity))
 	g.Expect(outcome.Verdict).To(Equal(apiv1.StepVerdictAllow))
 	g.Expect(outcome.Cosign).To(Equal(&apiv1.Verification{
 		Provider:       apiv1.VerifyProviderCosign,
@@ -130,10 +163,10 @@ func TestCosignStep_SkipsTooNewSignature(t *testing.T) {
 	stepConfig := apiv1.HookStep{
 		Name:     "signature",
 		Provider: apiv1.HookProviderCosign,
-		Cosign: &apiv1.CosignHookConfig{
+		Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{
 			MatchOIDCIdentity: []apiv1.OIDCIdentity{{Issuer: "issuer", Subject: "subject"}},
 			MinAge:            &metav1.Duration{Duration: minAge},
-		},
+		}},
 	}
 	step, err := CosignBuilder(verifier)(stepConfig)
 	g.Expect(err).ToNot(HaveOccurred())
@@ -157,9 +190,9 @@ func TestCosignStep_MapsSignatureRejectionToDeny(t *testing.T) {
 	step, err := CosignBuilder(verifier)(apiv1.HookStep{
 		Name:     "signature",
 		Provider: apiv1.HookProviderCosign,
-		Cosign: &apiv1.CosignHookConfig{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
+		Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
 			Issuer: "issuer", Subject: "subject",
-		}}},
+		}}}},
 	})
 	g.Expect(err).ToNot(HaveOccurred())
 
@@ -177,9 +210,9 @@ func TestCosignStep_PropagatesInfrastructureError(t *testing.T) {
 	step, err := CosignBuilder(verifier)(apiv1.HookStep{
 		Name:     "signature",
 		Provider: apiv1.HookProviderCosign,
-		Cosign: &apiv1.CosignHookConfig{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
+		Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
 			Issuer: "issuer", Subject: "subject",
-		}}},
+		}}}},
 	})
 	g.Expect(err).ToNot(HaveOccurred())
 
@@ -194,10 +227,10 @@ func attestationStep(t *testing.T, verifier *fakeCosignVerifier, attestations ..
 	step, err := CosignBuilder(verifier)(apiv1.HookStep{
 		Name:     "signature",
 		Provider: apiv1.HookProviderCosign,
-		Cosign: &apiv1.CosignHookConfig{
+		Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{
 			MatchOIDCIdentity: []apiv1.OIDCIdentity{{Issuer: "issuer", Subject: "subject"}},
 			Attestations:      attestations,
-		},
+		}},
 	})
 	NewWithT(t).Expect(err).ToNot(HaveOccurred())
 	return step

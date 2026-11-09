@@ -27,10 +27,10 @@ func TestValidateArtifactHooks(t *testing.T) {
 			step: apiv1.HookStep{
 				Name:     "signature",
 				Provider: apiv1.HookProviderCosign,
-				Cosign: &apiv1.CosignHookConfig{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
+				Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
 					Issuer:  "https://token.actions.githubusercontent.com",
 					Subject: `^https://github\.com/example/.*$`,
-				}}},
+				}}}},
 			},
 		},
 		{
@@ -38,9 +38,9 @@ func TestValidateArtifactHooks(t *testing.T) {
 			step: apiv1.HookStep{
 				Name:     "Bad_Name",
 				Provider: apiv1.HookProviderCosign,
-				Cosign: &apiv1.CosignHookConfig{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
+				Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
 					Issuer: "issuer", Subject: "subject",
-				}}},
+				}}}},
 			},
 			err: "lowercase identifier",
 		},
@@ -63,9 +63,9 @@ func TestValidateArtifactHooks(t *testing.T) {
 			step: apiv1.HookStep{
 				Name: "signature", Provider: apiv1.HookProviderCosign,
 				Timeout: &metav1.Duration{Duration: 0},
-				Cosign: &apiv1.CosignHookConfig{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
+				Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
 					Issuer: "issuer", Subject: "subject",
-				}}},
+				}}}},
 			},
 			err: "timeout must be greater than 0",
 		},
@@ -74,9 +74,9 @@ func TestValidateArtifactHooks(t *testing.T) {
 			step: apiv1.HookStep{
 				Name: "signature", Provider: apiv1.HookProviderCosign,
 				Concurrency: &zero,
-				Cosign: &apiv1.CosignHookConfig{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
+				Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
 					Issuer: "issuer", Subject: "subject",
-				}}},
+				}}}},
 			},
 			err: "concurrency must be at least 1",
 		},
@@ -85,9 +85,9 @@ func TestValidateArtifactHooks(t *testing.T) {
 			step: apiv1.HookStep{
 				Name: "signature", Provider: apiv1.HookProviderCosign,
 				Retries: func() *int { n := -1; return &n }(),
-				Cosign: &apiv1.CosignHookConfig{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
+				Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
 					Issuer: "issuer", Subject: "subject",
-				}}},
+				}}}},
 			},
 			err: "retries must be at least 0",
 		},
@@ -96,9 +96,9 @@ func TestValidateArtifactHooks(t *testing.T) {
 			step: apiv1.HookStep{
 				Name: "signature", Provider: apiv1.HookProviderCosign,
 				OnError: "ignore",
-				Cosign: &apiv1.CosignHookConfig{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
+				Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
 					Issuer: "issuer", Subject: "subject",
-				}}},
+				}}}},
 			},
 			err: "onError",
 		},
@@ -107,9 +107,9 @@ func TestValidateArtifactHooks(t *testing.T) {
 			step: apiv1.HookStep{
 				Name: "signature", Provider: apiv1.HookProviderCosign,
 				OnDeny: "ignore",
-				Cosign: &apiv1.CosignHookConfig{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
+				Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
 					Issuer: "issuer", Subject: "subject",
-				}}},
+				}}}},
 			},
 			err: "onDeny",
 		},
@@ -117,10 +117,10 @@ func TestValidateArtifactHooks(t *testing.T) {
 			name: "attestation entry is neither an alias nor a URI",
 			step: apiv1.HookStep{
 				Name: "signature", Provider: apiv1.HookProviderCosign,
-				Cosign: &apiv1.CosignHookConfig{
+				Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{
 					MatchOIDCIdentity: []apiv1.OIDCIdentity{{Issuer: "issuer", Subject: "subject"}},
 					Attestations:      []string{"sbom"},
-				},
+				}},
 			},
 			err: `attestations[0] "sbom" must be one of cyclonedx, slsa-provenance, spdx or a predicate type URI`,
 		},
@@ -128,20 +128,104 @@ func TestValidateArtifactHooks(t *testing.T) {
 			name: "attestation given as an alias and as its URI",
 			step: apiv1.HookStep{
 				Name: "signature", Provider: apiv1.HookProviderCosign,
-				Cosign: &apiv1.CosignHookConfig{
+				Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{
 					MatchOIDCIdentity: []apiv1.OIDCIdentity{{Issuer: "issuer", Subject: "subject"}},
 					Attestations:      []string{"spdx", "https://spdx.dev/Document"},
-				},
+				}},
 			},
 			err: `attestations[1] "https://spdx.dev/Document" is duplicated by "spdx"`,
+		},
+		{
+			name: "cosign without index or platform",
+			step: apiv1.HookStep{
+				Name: "signature", Provider: apiv1.HookProviderCosign,
+				Cosign: &apiv1.CosignHookConfig{},
+			},
+			err: "at least one of index and platform is required",
+		},
+		{
+			name: "index without identities",
+			step: apiv1.HookStep{
+				Name: "signature", Provider: apiv1.HookProviderCosign,
+				Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{}},
+			},
+			err: "index: matchOIDCIdentity must contain at least one identity",
+		},
+		{
+			name: "platform without platforms",
+			step: apiv1.HookStep{
+				Name: "signature", Provider: apiv1.HookProviderCosign,
+				Cosign: &apiv1.CosignHookConfig{Platform: &apiv1.CosignPlatformPolicy{
+					CosignPolicy: apiv1.CosignPolicy{MatchOIDCIdentity: []apiv1.OIDCIdentity{{Issuer: "issuer", Subject: "subject"}}},
+				}},
+			},
+			err: "platform: platforms must contain at least one platform",
+		},
+		{
+			name: "platform with an invalid platform",
+			step: apiv1.HookStep{
+				Name: "signature", Provider: apiv1.HookProviderCosign,
+				Cosign: &apiv1.CosignHookConfig{Platform: &apiv1.CosignPlatformPolicy{
+					CosignPolicy: apiv1.CosignPolicy{MatchOIDCIdentity: []apiv1.OIDCIdentity{{Issuer: "issuer", Subject: "subject"}}},
+					Platforms:    []string{"linux"},
+				}},
+			},
+			err: `platforms[0] "linux" must be os/arch or os/arch/variant`,
+		},
+		{
+			name: "platform with a duplicated platform",
+			step: apiv1.HookStep{
+				Name: "signature", Provider: apiv1.HookProviderCosign,
+				Cosign: &apiv1.CosignHookConfig{Platform: &apiv1.CosignPlatformPolicy{
+					CosignPolicy: apiv1.CosignPolicy{MatchOIDCIdentity: []apiv1.OIDCIdentity{{Issuer: "issuer", Subject: "subject"}}},
+					Platforms:    []string{"linux/amd64", "linux/amd64"},
+				}},
+			},
+			err: `platforms[1] "linux/amd64" is duplicated`,
+		},
+		{
+			name: "platform policy is validated on its own",
+			step: apiv1.HookStep{
+				Name: "signature", Provider: apiv1.HookProviderCosign,
+				Cosign: &apiv1.CosignHookConfig{
+					Index: &apiv1.CosignPolicy{MatchOIDCIdentity: []apiv1.OIDCIdentity{{Issuer: "issuer", Subject: "subject"}}},
+					Platform: &apiv1.CosignPlatformPolicy{
+						CosignPolicy: apiv1.CosignPolicy{
+							MatchOIDCIdentity: []apiv1.OIDCIdentity{{Issuer: "issuer", Subject: "subject"}},
+							Attestations:      []string{"sbom"},
+						},
+						Platforms: []string{"linux/amd64"},
+					},
+				},
+			},
+			err: "platform: attestations[0]",
+		},
+		{
+			name: "index and platform with their own policies",
+			step: apiv1.HookStep{
+				Name: "signature", Provider: apiv1.HookProviderCosign,
+				Cosign: &apiv1.CosignHookConfig{
+					Index: &apiv1.CosignPolicy{
+						MatchOIDCIdentity: []apiv1.OIDCIdentity{{Issuer: "issuer", Subject: "subject"}},
+						Attestations:      []string{"slsa-provenance"},
+					},
+					Platform: &apiv1.CosignPlatformPolicy{
+						CosignPolicy: apiv1.CosignPolicy{
+							MatchOIDCIdentity: []apiv1.OIDCIdentity{{Issuer: "other", Subject: "other"}},
+							Attestations:      []string{"spdx"},
+						},
+						Platforms: []string{"linux/amd64", "linux/arm64/v8"},
+					},
+				},
+			},
 		},
 		{
 			name: "invalid identity regex",
 			step: apiv1.HookStep{
 				Name: "signature", Provider: apiv1.HookProviderCosign,
-				Cosign: &apiv1.CosignHookConfig{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
+				Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
 					Issuer: "issuer", Subject: "(",
-				}}},
+				}}}},
 			},
 			err: "does not compile",
 		},
@@ -149,10 +233,10 @@ func TestValidateArtifactHooks(t *testing.T) {
 			name: "negative minAge",
 			step: apiv1.HookStep{
 				Name: "signature", Provider: apiv1.HookProviderCosign,
-				Cosign: &apiv1.CosignHookConfig{
+				Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{
 					MatchOIDCIdentity: []apiv1.OIDCIdentity{{Issuer: "issuer", Subject: "subject"}},
 					MinAge:            &metav1.Duration{Duration: -time.Second},
-				},
+				}},
 			},
 			err: "minAge must be >= 0",
 		},
@@ -182,7 +266,7 @@ func TestValidateArtifactHooks(t *testing.T) {
 		entry := validArtifactEntry()
 		entry.Verify = &apiv1.ArtifactVerification{
 			Provider:          apiv1.VerifyProviderCosign,
-			MatchOIDCIdentity: validHookStep().Cosign.MatchOIDCIdentity,
+			MatchOIDCIdentity: validHookStep().Cosign.Index.MatchOIDCIdentity,
 		}
 		entry.Hooks = &apiv1.ArtifactHooks{Pre: []apiv1.HookStep{validHookStep()}}
 		g.Expect(validateArtifactEntry(entry)).To(MatchError(ContainSubstring("verify and hooks.pre")))
@@ -196,8 +280,8 @@ func TestValidateArtifactHooks(t *testing.T) {
 		step.Retries = &zero
 		step.OnDeny = apiv1.HookActionWarn
 		step.OnError = apiv1.HookActionWarn
-		step.Cosign.MinAge = &metav1.Duration{Duration: time.Hour}
-		step.Cosign.Attestations = []string{"spdx", "slsa-provenance", "https://apko.dev/image-configuration"}
+		step.Cosign.Index.MinAge = &metav1.Duration{Duration: time.Hour}
+		step.Cosign.Index.Attestations = []string{"spdx", "slsa-provenance", "https://apko.dev/image-configuration"}
 		g.Expect(validateArtifactHooks(apiv1.ArtifactHooks{Pre: []apiv1.HookStep{step}})).To(Succeed())
 	})
 }
@@ -305,20 +389,21 @@ artifacts:
         - name: signature
           provider: cosign
           cosign:
-            minAge: 12h
-            matchOIDCIdentity:
-              - issuer: https://token.actions.githubusercontent.com
-                subject: ^https://github\.com/example/image/.*$
+            index:
+              minAge: 12h
+              matchOIDCIdentity:
+                - issuer: https://token.actions.githubusercontent.com
+                  subject: ^https://github\.com/example/image/.*$
 `
 	cfg, _, err := Decode(strings.NewReader(raw))
 	g.Expect(err).ToNot(HaveOccurred())
 	g.Expect(Validate(cfg)).To(Succeed())
 	g.Expect(cfg.Artifacts[0].Hooks.Pre).To(HaveLen(1))
-	g.Expect(cfg.Artifacts[0].Hooks.Pre[0].Cosign.MinAge.Duration).To(Equal(12 * time.Hour))
+	g.Expect(cfg.Artifacts[0].Hooks.Pre[0].Cosign.Index.MinAge.Duration).To(Equal(12 * time.Hour))
 
 	t.Run("unknown provider config field is rejected", func(t *testing.T) {
 		g := NewWithT(t)
-		invalid := strings.Replace(raw, "            matchOIDCIdentity:", "            unexpected: true\n            matchOIDCIdentity:", 1)
+		invalid := strings.Replace(raw, "              matchOIDCIdentity:", "              unexpected: true\n              matchOIDCIdentity:", 1)
 		_, _, err := Decode(strings.NewReader(invalid))
 		g.Expect(err).To(HaveOccurred())
 		g.Expect(err.Error()).To(ContainSubstring("unknown field"))
@@ -346,10 +431,10 @@ func validHookStep() apiv1.HookStep {
 	return apiv1.HookStep{
 		Name:     "signature",
 		Provider: apiv1.HookProviderCosign,
-		Cosign: &apiv1.CosignHookConfig{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
+		Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
 			Issuer:  "https://token.actions.githubusercontent.com",
 			Subject: `^https://github\.com/example/.*$`,
-		}}},
+		}}}},
 	}
 }
 

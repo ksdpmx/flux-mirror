@@ -94,6 +94,51 @@ func (v *Verifier) VerifyAttestations(
 	return verifyAttestationEntities(trustedRoot, desc.Digest, entities, identities, required, attestationVerifierOptions())
 }
 
+// ResolvePlatforms reads the image index of ref and returns the manifest digest
+// of each requested platform (os/arch or os/arch/variant). A platform that the
+// index does not have is left out of the result, and so is every platform when
+// ref is not an index.
+func (v *Verifier) ResolvePlatforms(ctx context.Context, ref string, platforms []string) (map[string]string, error) {
+	ref = strings.TrimPrefix(ref, "oci://")
+	parsed, err := name.ParseReference(ref, v.client.staticNameOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("parse reference %q: %w", ref, err)
+	}
+	desc, err := remote.Get(parsed, v.remoteOptions(ctx)...)
+	if err != nil {
+		return nil, fmt.Errorf("fetch descriptor for %q: %w", ref, err)
+	}
+	digests := make(map[string]string, len(platforms))
+	if !desc.MediaType.IsIndex() {
+		return digests, nil
+	}
+	index, err := desc.ImageIndex()
+	if err != nil {
+		return nil, fmt.Errorf("read image index %q: %w", ref, err)
+	}
+	manifest, err := index.IndexManifest()
+	if err != nil {
+		return nil, fmt.Errorf("read image index manifest %q: %w", ref, err)
+	}
+	for _, platform := range platforms {
+		// An empty or partial spec would match every manifest.
+		if parts := strings.Split(platform, "/"); len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+			return nil, fmt.Errorf("platform %q must be os/arch or os/arch/variant", platform)
+		}
+		want, err := v1.ParsePlatform(platform)
+		if err != nil {
+			return nil, fmt.Errorf("parse platform %q: %w", platform, err)
+		}
+		for _, m := range manifest.Manifests {
+			if m.Platform != nil && m.Platform.Satisfies(*want) {
+				digests[platform] = m.Digest.String()
+				break
+			}
+		}
+	}
+	return digests, nil
+}
+
 // attestationVerifierOptions are the checks every attestation must pass: a
 // signed certificate timestamp, and a transparency log entry with its
 // integrated timestamp.

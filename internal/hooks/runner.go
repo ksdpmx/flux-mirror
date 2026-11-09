@@ -412,6 +412,7 @@ func unitResults(units []Unit, runs []unitRun) []apiv1.UnitResult {
 		results[i].Verdict = run.outcome.Verdict
 		results[i].Reason = run.outcome.Reason
 		results[i].Wizcli = run.outcome.Wizcli
+		results[i].Cosign = run.outcome.Cosign
 	}
 	return results
 }

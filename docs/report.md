@@ -144,8 +144,8 @@ verification. Only `provider` is guaranteed; the rest is best-effort.
 | `identity`       | Matched certificate identity (subject alternative name).                                             |
 | `integratedTime` | Transparency-log integration time (RFC 3339). Present only when the bundle carries a Tlog timestamp. |
 | `age`            | Signature age, as a Go duration string. Present only on a `signature-too-new` skip.                  |
-| `minAge`         | Configured `verify.minAge` or `hooks.pre[].cosign.minAge`. Present only on a `signature-too-new` skip. |
-| `attestations`   | Predicate type URIs of the attestations that were verified for the digest. Present only on a `steps[]` row whose `cosign.attestations` listed some. |
+| `minAge`         | Configured `verify.minAge` or the `minAge` of the `hooks.pre[].cosign` policy. Present only on a `signature-too-new` skip. |
+| `attestations`   | Predicate type URIs of the attestations that were verified for the digest. Present only when the policy listed some. |
 
 ## Hook step fields
 
@@ -176,7 +176,8 @@ recorded the same way and the tag is copied. A too-new cosign signature is a
 | `units[]`  | Per-unit results, present only when the step has named units.      |
 
 A step whose work splits into named units, such as `wizcli` with one unit per
-platform, adds `units[]`. The step `verdict`, `reason`, and `error` are the
+platform or `cosign` with an `index` and a `platform` policy (units `index` and
+one per platform), adds `units[]`. The step `verdict`, `reason`, and `error` are the
 aggregate of its units: a denied unit denies the step (its `reason` lists each
 denied unit as `<unit>: <reason>`), otherwise an errored unit makes the step an
 error, otherwise a skipped unit skips it. Each unit row has:
@@ -190,6 +191,7 @@ error, otherwise a skipped unit skips it. Each unit row has:
 | `attempts` | Number of attempts made for this unit.                               |
 | `duration` | Unit time, including retries and waiting for a free slot.            |
 | `wizcli`   | Scan result of a `wizcli` unit (below).                              |
+| `cosign`   | Verified signature metadata of a passing `cosign` unit (see [Verification fields](#verification-fields)). |
 
 The `wizcli` object keeps only what the report needs; the Wiz scan document
 itself is never copied because it names the user who ran the scan:

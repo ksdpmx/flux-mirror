@@ -287,30 +287,48 @@ does not support hooks yet.
 
 Each step has a unique lowercase `.name`, a `.provider`, and exactly the
 configuration block named after that provider; a missing or misplaced block is
-rejected. `cosign.matchOIDCIdentity`
-uses the same issuer and subject-regexp rules as [`verify`](#signature-verification).
-`cosign.minAge` is an optional duration that defers valid signatures until
-their verified Rekor integrated time is old enough; too-new signatures yield
-`skipped` with reason `signature-too-new`. A signature without a verified Tlog
-timestamp fails when `minAge` is configured. An entry cannot combine `verify:`
-and `hooks.pre`, because that would verify each tag twice.
+rejected. An entry cannot combine `verify:` and `hooks.pre`, because that would
+verify each tag twice.
 
-`cosign.attestations` is an optional list of attestations that must be attached
-to the image, each signed by one of `matchOIDCIdentity` (the same identities as
-the signature). An entry is a short alias, `spdx` (`https://spdx.dev/Document`),
-`slsa-provenance` (`https://slsa.dev/provenance/v1`) or `cyclonedx`
-(`https://cyclonedx.org/bom`), or a full predicate type URI such as
-`https://apko.dev/image-configuration`; two entries that mean the same type are
-rejected. The step runs after the signature check and denies the tag when a
-listed type is missing or does not verify. The predicate type is read from the
-verified in-toto statement, which must be about the digest being mirrored, and
-not from the registry's annotations, which are not signed. Attestations are read
-from cosign's `sha256-<digest>.att` tag of the mirrored digest (for a
-multi-arch image that is the index, not the platform images), and an `.att`
-layer that cannot be read counts as missing. Only the listed types are checked:
-other attestations attached to the image are neither required nor verified, and
-the signature check itself is not changed. `minAge` applies to the signature
-only. Attestations are not discovered through the referrers API yet.
+A `cosign` step says which digests to verify and how, in two optional blocks of
+which at least one is required:
+
+- `cosign.index` verifies the digest the tag points at: the image index of a
+  multi-arch image, or the image itself for a single-platform tag.
+- `cosign.platform` verifies the platform manifests listed in
+  `cosign.platform.platforms` (`os/arch` or `os/arch/variant`, for example
+  `linux/amd64`, as for `wizcli`). A platform without a variant matches any
+  variant of it. A platform that is not in the image index, or a tag that is not
+  an index, is an error handled by `.onError`.
+
+Each block has its own policy, so the index and the platforms can differ:
+
+- `matchOIDCIdentity` is required and uses the same issuer and subject-regexp
+  rules as [`verify`](#signature-verification).
+- `minAge` is an optional duration that defers valid signatures until their
+  verified Rekor integrated time is old enough; too-new signatures yield
+  `skipped` with reason `signature-too-new`. A signature without a verified Tlog
+  timestamp fails when `minAge` is configured.
+- `attestations` is an optional list of attestations that must be attached to the
+  digest, each signed by one of that block's `matchOIDCIdentity`. An entry is a
+  short alias, `spdx` (`https://spdx.dev/Document`), `slsa-provenance`
+  (`https://slsa.dev/provenance/v1`) or `cyclonedx` (`https://cyclonedx.org/bom`),
+  or a full predicate type URI such as `https://apko.dev/image-configuration`;
+  two entries that mean the same type are rejected. The check runs after the
+  signature check and denies the tag when a listed type is missing or does not
+  verify. The predicate type is read from the verified in-toto statement, which
+  must be about the digest being verified, and not from the registry's
+  annotations, which are not signed. Attestations are read from cosign's
+  `sha256-<digest>.att` tag of that digest, and an `.att` layer that cannot be
+  read counts as missing. Only the listed types are checked: other attestations
+  attached to the image are neither required nor verified, and `minAge` applies to
+  the signature only. Attestations are not discovered through the referrers API
+  yet.
+
+The work units of a `cosign` step are one for `index` and one per platform, so
+`concurrency` and `retries` count them and the report lists each under
+`steps[].units[]` with its own verification. With only `index`, the step is one
+unit and its result has no `units`.
 
 Common step controls are optional:
 
@@ -354,10 +372,18 @@ artifacts:
         - name: signature
           provider: cosign
           cosign:
-            minAge: 12h
-            matchOIDCIdentity:
-              - issuer: https://token.actions.githubusercontent.com
-                subject: ^https://github\.com/example/image/.*$
+            index:
+              minAge: 12h
+              matchOIDCIdentity:
+                - issuer: https://token.actions.githubusercontent.com
+                  subject: ^https://github\.com/example/image/.*$
+              attestations: [slsa-provenance]
+            platform:
+              platforms: [linux/amd64, linux/arm64]
+              matchOIDCIdentity:
+                - issuer: https://token.actions.githubusercontent.com
+                  subject: ^https://github\.com/example/image/.*$
+              attestations: [spdx]
         - name: vuln-scan
           provider: wizcli
           timeout: 10m
@@ -976,8 +1002,10 @@ first mirrored. Referrers that exist with a different digest are skipped
 | `artifacts[].destinationType`        | `oci`      |
 | `artifacts[].verify`                 | unset      |
 | `artifacts[].hooks`                  | unset      |
-| `artifacts[].hooks.pre[].cosign.minAge` | unset     |
-| `artifacts[].hooks.pre[].cosign.attestations` | unset |
+| `artifacts[].hooks.pre[].cosign.index.minAge` | unset |
+| `artifacts[].hooks.pre[].cosign.index.attestations` | unset |
+| `artifacts[].hooks.pre[].cosign.platform.minAge` | unset |
+| `artifacts[].hooks.pre[].cosign.platform.attestations` | unset |
 | `artifacts[].hooks.pre[].timeout`    | `--timeout` |
 | `artifacts[].hooks.pre[].concurrency` | `1`       |
 | `artifacts[].hooks.pre[].retries`    | `0`        |

@@ -176,11 +176,14 @@ Status: PR1, PR2 and the `wizcli` provider of PR3 are implemented in this
 repository (`internal/hooks`), and `--verbose` logs each hook run, step and
 per-platform unit. Blocked tags print the step and failed policies in the text
 output. The `sk8s-flux-mirror` chart (S8) and the initContainer that delivers the
-`wizcli` binary (S17) are done and ran in a Kubernetes CronJob. Not done:
+`wizcli` binary (S17) are done and ran in a Kubernetes CronJob. The `cosign`
+step also verifies attestations (S18) and has per-platform work units
+(`cosign.index` / `cosign.platform`). Not done:
 `hooks` for `charts` entries, the `AUDIT`-only verdict check (S1), whether
-`scan dir` renders chart templates (S3), `cosign` work units per platform
-(S5), `hooks.post` (S13), and a `wiz-api` provider (S7). Implemented as decided
-in S5: the step `concurrency` counts work units (`tag x platform` for `wizcli`),
+`scan dir` renders chart templates (S3), `hooks.post` (S13), and a `wiz-api`
+provider (S7). Implemented as decided
+in S5: the step `concurrency` counts work units (`tag x platform` for `wizcli`,
+`index` plus one per platform for `cosign`),
 and `wizcli.platforms` is required. Later renamed: the `onFailure` control named
 in the sections below is now `onError` (an exhausted infrastructure error), and
 `onDeny` (`block` or `warn`) was added for a policy denial; the report marks a
@@ -784,11 +787,73 @@ scans a directory; both accept `--policies`, `--projects`, `--timeout`,
     no separate attestation identity was needed, and requiring a type that is not
     attached blocks the tag. Tests use sigstore-go's virtual sigstore, which adds
     indirect test dependencies to `go.mod`.
+  - **Implemented: `cosign.index` and `cosign.platform`.** The top-level
+    `cosign.matchOIDCIdentity`/`minAge`/`attestations` were replaced by two
+    optional blocks (at least one required), each with its own
+    `matchOIDCIdentity`, `minAge` and `attestations`; `platform` also has
+    `platforms` (`os/arch[/variant]`, listed explicitly like `wizcli`). A step
+    has one work unit named `index` and one per platform, so `concurrency` and
+    `retries` count them, each digest is verified on its own (signature, then its
+    `.att`), and the report lists each unit's `cosign` result. Only `index` keeps
+    the old shape: one unnamed unit. The platform digests are read from the image
+    index once per tag (`Verifier.ResolvePlatforms`, a failure is not cached so a
+    retry asks again); a platform that is not in the index, or a tag that is not
+    an index, is a permanent error handled by `onError`, as for `wizcli`. Checked
+    on the real images: for `cgr.dev/lexisnexislegal.com/amazon-k8s-cni-init` the
+    index and both platforms have a `.sig` and the same four `.att` types.
   - Still open: attestations through the referrers path (and the first-bundle
-    risk above), per-platform `.sig`/`.att` (S5), an optional identity per
-    attestation if one is ever signed by another identity, and `.att` layers that
-    cannot be read are skipped without a message (the denial only names the
-    missing type and the counts).
+    risk above), a `platform` block with a wildcard ("all platforms"), an
+    optional identity per attestation if one is ever signed by another identity,
+    and `.att` layers that cannot be read are skipped without a message (the
+    denial only names the missing type and the counts). The `sk8s-flux-mirror`
+    chart still renders the old top-level `cosign` fields.
+- **S19. Scanning an SBOM taken from a verified attestation (not planned; wizcli
+  cannot do it).** Idea: verify the SPDX or CycloneDX attestation, extract the
+  SBOM and scan it instead of pulling the image.
+  - **Spike result (2026-11-10, wizcli 1.83, the amd64 SPDX of
+    `cgr.dev/lexisnexislegal.com/amazon-k8s-cni-init:v1.23.2`, 250 KB with
+    hundreds of packages, and its CycloneDX, 85 KB):** `wizcli scan dir` does not
+    read an SBOM. The file counts as one scanned file and nothing else: no
+    libraries, OS packages or resources, 0 vulnerabilities, and the verdict is
+    `PASSED_BY_POLICY`, the same as an empty directory. Other file names did not
+    change it (`sbom.spdx.json`, `spdx.spdx.json`, `bom.json`, `sbom.cdx.json`).
+    `--sbom-format` is an output option (it generates an SBOM), not an input, and
+    `scan` has no SBOM command (only `dir`, `container-image`, `vm`, `vm-image`).
+    So a wizcli `source: sbom` would pass every image without checking anything;
+    never build it. It also shows that a `PASSED_BY_POLICY` verdict alone proves
+    nothing about what was scanned.
+  - **What the attestations hold:** the `predicate` of each type differs: SLSA
+    provenance (`buildDefinition`, `runDetails`), SPDX 2.3 (`packages`,
+    `relationships`), CycloneDX 1.7 (`components`, `dependencies`) and the apko
+    image configuration. Only SPDX and CycloneDX are SBOMs, and they can list
+    different packages for the same image. The index and the platform manifests
+    have separate ones, and the platform one is the real list (250 KB against a
+    few KB for the index), so a scan would use the platform SBOM.
+  - **Design kept for a scanner that can read an SBOM (grype, trivy, ...):** no
+    file system paths in the config, because an extractor that writes, or a
+    consumer that reads, a user-given path can touch any file, concurrent tags and
+    platforms would overwrite each other, and a consumer could read a file that
+    was never verified. Instead, named outputs wired in the config:
+    the `cosign` policy has `outputs: {spdx: sbom}` (an attestation alias to an
+    artifact name), and a consumer step has `input: sbom`. The runner owns the
+    files: one temporary directory per tag (mode 0700, files 0600, removed after
+    the tag whatever the result), one subdirectory per work unit (`index` or the
+    platform with `/` as `_`), written only after the attestation verified, with
+    a size limit per file, and only for aliases (stable names). The write is of the
+    `predicate` bytes as they are.
+  - **Config checks, so a forgotten extraction is a load error:** an `input` must
+    name an output of an earlier step; an output type must be listed in that
+    policy's `attestations`, so it was verified; the consumer's platforms must be
+    a subset of the producer's; names are unique. At run time a consumer that
+    finds no file is a permanent error and never a pass.
+  - **Why in the `cosign` step and not a separate `cosign-extract` provider:**
+    extraction must come only from a verified statement, and a separate provider
+    would verify again (identities and requests twice) or need state shared
+    between steps. A `cosign-attestation` provider that verifies and extracts in
+    one step is the same thing under another name.
+  - Not planned until there is a consumer. An alternative for a faster check
+    without pulling the image is to scan the SBOM with another tool outside
+    flux-mirror.
 
 ## Backlog
 

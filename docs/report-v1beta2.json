@@ -220,6 +220,47 @@
                                   "minimum": 0,
                                   "type": "integer"
                                 },
+                                "cosign": {
+                                  "additionalProperties": false,
+                                  "description": "Cosign carries the verified signature metadata when the provider is\ncosign and the signature of this unit passed.",
+                                  "properties": {
+                                    "age": {
+                                      "description": "Age is the signature age on the signature-too-new skip.",
+                                      "type": "string"
+                                    },
+                                    "attestations": {
+                                      "description": "Attestations lists the predicate types of the attestations that were\nverified for the digest, as full predicate type URIs.",
+                                      "items": {
+                                        "type": "string"
+                                      },
+                                      "type": "array"
+                                    },
+                                    "identity": {
+                                      "description": "Identity is the recovered keyless certificate identity.",
+                                      "type": "string"
+                                    },
+                                    "integratedTime": {
+                                      "description": "IntegratedTime is the verified transparency-log timestamp.",
+                                      "type": "string"
+                                    },
+                                    "issuer": {
+                                      "description": "Issuer is the recovered keyless certificate issuer.",
+                                      "type": "string"
+                                    },
+                                    "minAge": {
+                                      "description": "MinAge is the configured minimum age on the signature-too-new skip.",
+                                      "type": "string"
+                                    },
+                                    "provider": {
+                                      "description": "Provider is the verification provider (VerifyProviderCosign).",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "provider"
+                                  ],
+                                  "type": "object"
+                                },
                                 "duration": {
                                   "description": "Duration is the total unit time, including retries and waiting for a\nfree slot.",
                                   "type": "string"

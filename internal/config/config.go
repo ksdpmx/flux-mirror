@@ -630,15 +630,7 @@ func validateHookProvider(step apiv1.HookStep) error {
 		if step.Cosign == nil {
 			return fmt.Errorf("cosign is required for provider %q", step.Provider)
 		}
-		verification := apiv1.ArtifactVerification{
-			Provider:          apiv1.VerifyProviderCosign,
-			MatchOIDCIdentity: step.Cosign.MatchOIDCIdentity,
-			MinAge:            step.Cosign.MinAge,
-		}
-		if err := validateVerification(verification); err != nil {
-			return fmt.Errorf("cosign: %w", err)
-		}
-		if err := validateAttestations(step.Cosign.Attestations); err != nil {
+		if err := validateCosignHook(*step.Cosign); err != nil {
 			return fmt.Errorf("cosign: %w", err)
 		}
 	case apiv1.HookProviderWizcli:
@@ -659,6 +651,57 @@ func validateHookProvider(step apiv1.HookStep) error {
 
 var hookPlatformPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?$`)
 
+// validateCosignHook requires at least one of index and platform, and checks
+// the policy of each.
+func validateCosignHook(c apiv1.CosignHookConfig) error {
+	if c.Index == nil && c.Platform == nil {
+		return fmt.Errorf("at least one of index and platform is required")
+	}
+	if c.Index != nil {
+		if err := validateCosignPolicy(*c.Index); err != nil {
+			return fmt.Errorf("index: %w", err)
+		}
+	}
+	if c.Platform != nil {
+		if err := validateCosignPolicy(c.Platform.CosignPolicy); err != nil {
+			return fmt.Errorf("platform: %w", err)
+		}
+		if err := validatePlatforms(c.Platform.Platforms); err != nil {
+			return fmt.Errorf("platform: %w", err)
+		}
+	}
+	return nil
+}
+
+func validateCosignPolicy(p apiv1.CosignPolicy) error {
+	verification := apiv1.ArtifactVerification{
+		Provider:          apiv1.VerifyProviderCosign,
+		MatchOIDCIdentity: p.MatchOIDCIdentity,
+		MinAge:            p.MinAge,
+	}
+	if err := validateVerification(verification); err != nil {
+		return err
+	}
+	return validateAttestations(p.Attestations)
+}
+
+func validatePlatforms(platforms []string) error {
+	if len(platforms) == 0 {
+		return fmt.Errorf("platforms must contain at least one platform")
+	}
+	seen := make(map[string]struct{}, len(platforms))
+	for i, platform := range platforms {
+		if !hookPlatformPattern.MatchString(platform) {
+			return fmt.Errorf("platforms[%d] %q must be os/arch or os/arch/variant", i, platform)
+		}
+		if _, ok := seen[platform]; ok {
+			return fmt.Errorf("platforms[%d] %q is duplicated", i, platform)
+		}
+		seen[platform] = struct{}{}
+	}
+	return nil
+}
+
 // validateAttestations requires each entry to be a known alias or a predicate
 // type URI, and rejects two entries that resolve to the same predicate type.
 func validateAttestations(entries []string) error {
@@ -678,18 +721,8 @@ func validateAttestations(entries []string) error {
 }
 
 func validateWizcliHook(c apiv1.WizcliHookConfig) error {
-	if len(c.Platforms) == 0 {
-		return fmt.Errorf("platforms must contain at least one platform")
-	}
-	seen := make(map[string]struct{}, len(c.Platforms))
-	for i, platform := range c.Platforms {
-		if !hookPlatformPattern.MatchString(platform) {
-			return fmt.Errorf("platforms[%d] %q must be os/arch or os/arch/variant", i, platform)
-		}
-		if _, ok := seen[platform]; ok {
-			return fmt.Errorf("platforms[%d] %q is duplicated", i, platform)
-		}
-		seen[platform] = struct{}{}
+	if err := validatePlatforms(c.Platforms); err != nil {
+		return err
 	}
 	for i, policy := range c.Policies {
 		if strings.TrimSpace(policy) == "" {

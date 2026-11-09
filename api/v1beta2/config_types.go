@@ -622,8 +622,24 @@ type HookStep struct {
 	Wizcli *WizcliHookConfig `json:"wizcli,omitempty"`
 }
 
-// CosignHookConfig configures cosign signature identity matching for a hook.
+// CosignHookConfig configures cosign keyless verification for a hook. Index
+// and Platform say which digests are verified, each with its own policy, and at
+// least one is required.
 type CosignHookConfig struct {
+	// Index verifies the digest the tag points at: the image index of a
+	// multi-arch image, or the image itself for a single-platform tag.
+	// +optional
+	Index *CosignPolicy `json:"index,omitempty"`
+
+	// Platform verifies the platform manifests listed in it, each as its own
+	// work unit.
+	// +optional
+	Platform *CosignPlatformPolicy `json:"platform,omitempty"`
+}
+
+// CosignPolicy is what must hold for one digest: a signature by one of the
+// identities and, optionally, attestations.
+type CosignPolicy struct {
 	// MatchOIDCIdentity lists the Fulcio certificate identities to accept.
 	MatchOIDCIdentity []OIDCIdentity `json:"matchOIDCIdentity"`
 
@@ -631,7 +647,7 @@ type CosignHookConfig struct {
 	// +optional
 	MinAge *metav1.Duration `json:"minAge,omitempty"`
 
-	// Attestations lists the attestations that must be attached to the image
+	// Attestations lists the attestations that must be attached to the digest
 	// and signed by one of MatchOIDCIdentity, each as a short alias (spdx,
 	// slsa-provenance, cyclonedx) or a full predicate type URI. They are read
 	// from the cosign tag-based .att tag of the verified digest.
@@ -639,8 +655,20 @@ type CosignHookConfig struct {
 	Attestations []string `json:"attestations,omitempty"`
 }
 
+// CosignPlatformPolicy is a CosignPolicy applied to each listed platform of a
+// multi-arch image.
+type CosignPlatformPolicy struct {
+	CosignPolicy `json:",inline"`
+
+	// Platforms lists the platforms to verify, each as os/arch or os/arch/variant
+	// (for example linux/amd64). Every platform is its own work unit, and a
+	// platform missing from the image index is an error.
+	// +kubebuilder:validation:MinItems=1
+	Platforms []string `json:"platforms"`
+}
+
 // predicateTypeAliases maps the short attestation names accepted in
-// CosignHookConfig.Attestations to their in-toto predicate type URIs.
+// CosignPolicy.Attestations to their in-toto predicate type URIs.
 var predicateTypeAliases = map[string]string{
 	"spdx":            "https://spdx.dev/Document",
 	"slsa-provenance": "https://slsa.dev/provenance/v1",
