@@ -437,6 +437,29 @@ func TestRunner_EntriesAreSequential(t *testing.T) {
 	g.Expect(order[len(order)-1]).To(Equal("b1"))
 }
 
+func TestRunner_PreservesStepsReturnedByRun(t *testing.T) {
+	g := NewWithT(t)
+	preGateStep := StepResult{Name: "gate", Provider: "cosign", Verdict: StepVerdictAllow}
+	runStep := StepResult{Name: "run", Provider: "helm", Verdict: StepVerdictAllow}
+	r := newRunner(t)
+	result, err := r.Run(context.Background(), []EntryMirror{
+		&stubMirror{
+			name: "steps",
+			jobs: []Job{{
+				ID: "1.0.0",
+				Gate: func(context.Context) (GateResult, error) {
+					return GateResult{Steps: []StepResult{preGateStep}}, nil
+				},
+				Run: func(context.Context) (JobResult, error) {
+					return JobResult{Status: StatusCopied, Steps: []StepResult{runStep}}, nil
+				},
+			}},
+		},
+	})
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(result.Entries[0].Tags[0].Steps).To(Equal([]StepResult{preGateStep, runStep}))
+}
+
 func TestReport_Render(t *testing.T) {
 	g := NewWithT(t)
 	res := Result{

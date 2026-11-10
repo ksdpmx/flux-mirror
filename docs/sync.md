@@ -236,11 +236,12 @@ skipped) `reason`. Referrers are evaluated under `--dry-run` too.
 ## Pre-copy hooks
 
 For `artifacts[].hooks.pre`, the runner compares source and destination first,
-then executes the hook chain only for tags that will be copied. Up-to-date and
-drifted tags, plus all tags under `--dry-run`, do not run hooks; an up-to-date tag
-still lists its steps as skipped. Hook steps have
-their own timeout, concurrency, and retries; the copy's `--timeout` and
-`--retries` budget applies only after the gate allows it.
+then executes the hook chain only for tags that will be copied. For
+`charts[].hooks.pre`, it downloads the chart and compares the destination before
+running hooks. Up-to-date and drifted items, plus all items under `--dry-run`,
+do not run hooks; an up-to-date item still lists its steps as skipped. Hook
+steps have their own timeout, concurrency, and retries; the copy's `--timeout`
+and `--retries` budget applies only after the gate allows it.
 
 A policy denial produces a `blocked` tag unless the step sets `onDeny: warn`. An
 exhausted infrastructure error fails the tag by default; `onError: warn` records
@@ -252,6 +253,10 @@ A `wizcli` step reads the Wiz service account from the `WIZ_CLIENT_ID` and
 `WIZ_CLIENT_SECRET` environment variables and runs the `wizcli` binary found on
 `PATH` (or `wizcli.binary`); see [Wiz CLI scans](config.md#wiz-cli-scans) for
 the requirements, including temporary disk space for the image tarballs.
+
+Chart entries support only the `helm` provider, which checks the PGP signature
+and chart archive digest in the `.prov` sidecar using `helm.publicKey`. Artifacts
+do not support the `helm` provider.
 
 ## Exit codes
 

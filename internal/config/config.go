@@ -542,6 +542,11 @@ func validateChartEntry(c apiv1.ChartEntry) error {
 	if err := validateSelector(c.Selector); err != nil {
 		return fmt.Errorf("selector: %w", err)
 	}
+	if c.Hooks != nil {
+		if err := validateChartHooks(*c.Hooks); err != nil {
+			return fmt.Errorf("hooks: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -587,6 +592,14 @@ func validateArtifactEntry(a apiv1.ArtifactEntry) error {
 var hookNamePattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
 func validateArtifactHooks(hooks apiv1.ArtifactHooks) error {
+	return validateHookSteps(hooks, false)
+}
+
+func validateChartHooks(hooks apiv1.ArtifactHooks) error {
+	return validateHookSteps(hooks, true)
+}
+
+func validateHookSteps(hooks apiv1.ArtifactHooks, chart bool) error {
 	seen := make(map[string]struct{}, len(hooks.Pre))
 	for i, step := range hooks.Pre {
 		if !hookNamePattern.MatchString(step.Name) {
@@ -613,6 +626,13 @@ func validateArtifactHooks(hooks apiv1.ArtifactHooks) error {
 					i, field, value, apiv1.HookActionBlock, apiv1.HookActionWarn)
 			}
 		}
+		if chart && step.Provider != apiv1.HookProviderHelm {
+			return fmt.Errorf("pre[%d].provider %q must be %q for chart hooks",
+				i, step.Provider, apiv1.HookProviderHelm)
+		}
+		if !chart && step.Provider == apiv1.HookProviderHelm {
+			return fmt.Errorf("provider %q is only supported for charts", apiv1.HookProviderHelm)
+		}
 		if err := validateHookProvider(step); err != nil {
 			return fmt.Errorf("pre[%d]: %w", i, err)
 		}
@@ -628,6 +648,9 @@ func validateHookProvider(step apiv1.HookStep) error {
 		if step.Wizcli != nil {
 			return fmt.Errorf("wizcli cannot be set for provider %q", step.Provider)
 		}
+		if step.Helm != nil {
+			return fmt.Errorf("helm cannot be set for provider %q", step.Provider)
+		}
 		if step.Cosign == nil {
 			return fmt.Errorf("cosign is required for provider %q", step.Provider)
 		}
@@ -638,14 +661,28 @@ func validateHookProvider(step apiv1.HookStep) error {
 		if step.Cosign != nil {
 			return fmt.Errorf("cosign cannot be set for provider %q", step.Provider)
 		}
+		if step.Helm != nil {
+			return fmt.Errorf("helm cannot be set for provider %q", step.Provider)
+		}
 		if step.Wizcli == nil {
 			return fmt.Errorf("wizcli is required for provider %q", step.Provider)
 		}
 		if err := validateWizcliHook(*step.Wizcli); err != nil {
 			return fmt.Errorf("wizcli: %w", err)
 		}
+	case apiv1.HookProviderHelm:
+		if step.Cosign != nil || step.Wizcli != nil {
+			return fmt.Errorf("cosign and wizcli cannot be set for provider %q", step.Provider)
+		}
+		if step.Helm == nil {
+			return fmt.Errorf("helm is required for provider %q", step.Provider)
+		}
+		if strings.TrimSpace(step.Helm.PublicKey) == "" {
+			return fmt.Errorf("helm.publicKey is required")
+		}
 	default:
-		return fmt.Errorf("provider %q must be %q or %q", step.Provider, apiv1.HookProviderCosign, apiv1.HookProviderWizcli)
+		return fmt.Errorf("provider %q must be %q, %q, or %q",
+			step.Provider, apiv1.HookProviderCosign, apiv1.HookProviderWizcli, apiv1.HookProviderHelm)
 	}
 	return nil
 }

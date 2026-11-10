@@ -28,7 +28,15 @@ type Source interface {
 
 	// Download fetches the chart .tgz bytes for chartName at version.
 	Download(ctx context.Context, chartName, version string) ([]byte, error)
+
+	// DownloadProvenance fetches the optional .prov sidecar and returns the
+	// chart archive's filename from the repository index.
+	DownloadProvenance(ctx context.Context, chartName, version string) ([]byte, string, error)
 }
+
+// ErrProvenanceNotFound means the chart repository does not publish a .prov
+// sidecar for the requested chart version.
+var ErrProvenanceNotFound = errors.New("chart provenance file not found")
 
 // NormalizeSource parses the URL of an HTTP/S Helm chart repository. The scheme
 // is optional and defaults to https; only http and https are accepted (an OCI

@@ -181,9 +181,12 @@ func (r *Runner) runEntry(ctx context.Context, m EntryMirror) (apiv1.EntryResult
 					}
 				}
 				if err == nil && runCopy {
-					steps := res.Steps
-					res, err = r.runJob(gctx, job)
-					res.Steps = steps
+					gateSteps := res.Steps
+					runResult, runErr := r.runJob(gctx, job)
+					if len(gateSteps) > 0 {
+						runResult.Steps = append(gateSteps, runResult.Steps...)
+					}
+					res, err = runResult, runErr
 				}
 				if err == nil && !res.Status.Valid() {
 					err = fmt.Errorf("entry returned invalid status %q", string(res.Status))

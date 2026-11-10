@@ -276,20 +276,26 @@ artifacts:
 #### Pre-copy hooks
 
 `.artifacts[].hooks.pre` is an optional ordered list of checks that run after
-the source/destination comparison and before copying a tag. Two providers are
-available: `cosign`, which verifies keyless or key-based signatures discovered through the
-OCI 1.1 referrers API, falling back to cosign's legacy `sha256-<digest>.sig` tag
-discovery when no referrer bundle is present, and `wizcli`, which scans the
-image with the Wiz CLI (see [Wiz CLI scans](#wiz-cli-scans)). Steps run in
-order and the first step that denies, skips, or fails stops the chain. Hooks
-are not run for up-to-date or drifted tags, or under `--dry-run` (an up-to-date tag
-lists its steps as skipped); `charts[]`
-does not support hooks yet.
+the source/destination comparison and before copying a tag. Providers are
+`cosign`, which verifies keyless or key-based signatures and attestations, and
+`wizcli`, which scans the image with the Wiz CLI (see [Wiz CLI
+scans](#wiz-cli-scans)). Steps run in order and the first step that denies,
+skips, or fails stops the chain.
+
+`.charts[].hooks.pre` is also an optional ordered list, but its only provider is
+`helm`: it verifies the chart's PGP-signed `.prov` provenance file from the
+traditional HTTP/S Helm repository. The public key is supplied inline in
+`helm.publicKey`.
+
+Hooks run only for tags or chart versions that will be copied or overwritten.
+They are not run for up-to-date or drifted items, or under `--dry-run` (an
+up-to-date item lists its steps as skipped).
 
 Each step has a unique lowercase `.name`, a `.provider`, and exactly the
 configuration block named after that provider; a missing or misplaced block is
-rejected. An entry cannot combine `verify:` and `hooks.pre`, because that would
-verify each tag twice.
+rejected. Artifacts cannot use the chart-only `helm` provider. A chart cannot
+use `cosign` or `wizcli`. An artifact entry cannot combine `verify:` and
+`hooks.pre`, because that would verify each tag twice.
 
 A `cosign` step has two independent parts. Discovery finds where a signature or
 an attestation is stored, and verification decides what to trust. A signature is
@@ -531,6 +537,18 @@ Each entry offers the following subfields:
   with a prerelease suffix such as `">=1.0.0-0"` to include them explicitly.
 - `.overwrite`, see [Overwrite and drift behavior](#overwrite-and-drift-behavior).
 - `.ignoreDriftForExitCode`, see [Overwrite and drift behavior](#overwrite-and-drift-behavior).
+- `.hooks.pre`, optional Helm provenance verification steps. Only the `helm`
+  provider is supported for `charts[]`.
+
+The `helm` provider downloads the chart's `.prov` sidecar from the chart package
+URL plus `.prov`, then verifies its PGP signature and the archive digest using
+the configured key. A missing `.prov`, invalid signature, or digest mismatch is
+a policy denial handled by `onDeny`; network errors are handled by `onError`.
+The key is an inline standard ASCII-armored public key; preserve the blank
+separator between the armor headers and base64 body. Compact blocks without
+that separator are rejected. Concatenate multiple public-key blocks to trust
+more than one signer. A `.prov` sidecar is optional in the Helm repository
+format, but required by this hook.
 
 Helm repository authentication is **not** configured under `hosts`. It is loaded
 automatically from the ambient Helm repositories config — Helm's default
@@ -554,6 +572,12 @@ charts:
     selector:
       semver: ">=15.0.0 <16.0.0"
       limit: 5
+    hooks:
+      pre:
+        - name: verify-provenance
+          provider: helm
+          helm:
+            publicKey: "<publisher's ASCII-armored PGP public key>"
 ```
 
 #### Publishing charts to a Helm repository

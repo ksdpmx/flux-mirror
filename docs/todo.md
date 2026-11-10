@@ -179,7 +179,7 @@ output. The `sk8s-flux-mirror` chart (S8) and the initContainer that delivers th
 `wizcli` binary (S17) are done and ran in a Kubernetes CronJob. The `cosign`
 step also verifies attestations (S18) and has per-platform work units
 (`cosign` artifact digest plus optional `cosign.platform`). Not done:
-`hooks` for `charts` entries, the `AUDIT`-only verdict check (S1), whether
+chart hooks beyond Helm provenance, the `AUDIT`-only verdict check (S1), whether
 `scan dir` renders chart templates (S3), `hooks.post` (S13), and a `wiz-api`
 provider (S7). Implemented as decided
 in S5: the step `concurrency` counts work units (`tag x platform` for `wizcli`,
@@ -299,8 +299,9 @@ Validation decisions (`internal/config`): `provider` must be registered (PR1:
 `cosign`) and match the one filled sub-object (missing or extra sub-objects are
 errors); `name` unique within an entry and a valid lowercase identifier;
 `timeout` greater than 0, `concurrency` at least 1, `retries` at least 0,
-`onFailure` is `block` or `warn`; `hooks` on a `charts` entry is an error in the
-first version; an entry with both `verify:` and a `cosign` step is rejected at
+`onFailure` is `block` or `warn`; the initial design rejected `hooks` on
+`charts` entries (the current Helm provenance hook is documented in S20); an
+entry with both `verify:` and a `cosign` step is rejected at
 load time (it would verify twice); provider parameters are validated by the
 provider (for `cosign`: at least one `matchOIDCIdentity` with `issuer` and a
 valid `subject` regexp, reusing `validateVerification`).
@@ -847,7 +848,9 @@ scans a directory; both accept `--policies`, `--projects`, `--timeout`,
     than it is.
   - **Attestation content** is not inspected (for example the SLSA builder), and
     an unreadable `.att` layer counts as missing without a message.
-  - **Signatures that are not cosign: not supported.**
+  - **Signatures that are not cosign:** Helm `.prov` PGP provenance is supported
+    for `charts[]` hooks from HTTP/S Helm repositories; other signature systems
+    remain unsupported.
     - Docker Official Images (`docker.io/library/alpine:3.24.4`, checked): no
       cosign `.sig`, `.att` or referrers, so a `cosign` step always denies. They
       have Docker Content Trust (Notary v1): `notary.docker.io` lists 198 signed
@@ -860,10 +863,13 @@ scans a directory; both accept `--policies`, `--projects`, `--timeout`,
       raw in-toto statements) have no signature, certificate or log entry, so
       there is no signer to verify. They are copied with the index. Reading them
       would only be a consistency check and could be mistaken for a verification.
-    - Notation (Notary v2) signatures and Helm `.prov` (PGP) are not supported.
-  - `charts[]` has no `hooks`, so Helm charts are verified only as an OCI
-    artifact through `artifacts[]`; a chart is a single manifest, so the
-    top-level `cosign.signature` applies and `platform` is omitted.
+    - Notation (Notary v2) signatures are not supported.
+  - **Implemented: `charts[].hooks.pre` with the `helm` provider** for
+    traditional HTTP/S Helm repositories. It verifies the `.tgz.prov` PGP
+    signature and chart archive digest with inline ASCII-armored public keys.
+    OCI Helm charts still go through `artifacts[]` and Cosign; they are single
+    manifests, so `platform` is omitted. `charts[]` does not accept `cosign` or
+    `wizcli` hooks.
   - A `platform` block cannot say "all platforms"; they are listed one by one.
 - **S19. Scanning an SBOM taken from a verified attestation (not planned; wizcli
   cannot do it).** Idea: verify the SPDX or CycloneDX attestation, extract the

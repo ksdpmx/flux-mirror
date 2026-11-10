@@ -46,6 +46,15 @@ func TestValidateArtifactHooks(t *testing.T) {
 			err: "lowercase identifier",
 		},
 		{
+			name: "helm provider is only valid for chart hooks",
+			step: apiv1.HookStep{
+				Name:     "verify-provenance",
+				Provider: apiv1.HookProviderHelm,
+				Helm:     &apiv1.HelmHookConfig{PublicKey: "fixture"},
+			},
+			err: `provider "helm" is only supported for charts`,
+		},
+		{
 			name: "unknown provider",
 			step: apiv1.HookStep{
 				Name: "signature", Provider: "exec",
@@ -449,21 +458,33 @@ artifacts:
 		g.Expect(err.Error()).To(ContainSubstring("unknown field"))
 	})
 
-	t.Run("charts hooks are rejected by strict decoding", func(t *testing.T) {
+	t.Run("chart Helm provenance hooks decode and validate", func(t *testing.T) {
 		g := NewWithT(t)
-		invalid := `apiVersion: mirror.plugin.fluxcd.io/v1beta2
+		raw := `apiVersion: mirror.plugin.fluxcd.io/v1beta2
 kind: Config
 charts:
   - name: example
     source: https://charts.example.com
     destination: oci://ghcr.io/example/charts
-    selector: {}
+    selector:
+      semver: ">=1.0.0"
     hooks:
-      pre: []
+      pre:
+        - name: verify-provenance
+          provider: helm
+          helm:
+            publicKey: test-key
 `
-		_, _, err := Decode(strings.NewReader(invalid))
-		g.Expect(err).To(HaveOccurred())
-		g.Expect(err.Error()).To(ContainSubstring("unknown field"))
+		cfg, _, err := Decode(strings.NewReader(raw))
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(Validate(cfg)).To(Succeed())
+		g.Expect(cfg.Charts[0].Hooks.Pre[0].Provider).To(Equal(apiv1.HookProviderHelm))
+
+		invalid := strings.Replace(raw, "provider: helm", "provider: cosign", 1)
+		invalid = strings.Replace(invalid, "          helm:\n            publicKey: |", "          cosign: {}", 1)
+		cfg, _, err = Decode(strings.NewReader(invalid))
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(Validate(cfg)).To(MatchError(ContainSubstring(`provider "cosign" must be "helm" for chart hooks`)))
 	})
 }
 

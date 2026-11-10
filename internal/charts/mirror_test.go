@@ -4,17 +4,24 @@
 package charts
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/ProtonMail/go-crypto/openpgp"
+	"github.com/ProtonMail/go-crypto/openpgp/armor"
 	. "github.com/onsi/gomega"
 
 	apiv1 "github.com/fluxcd/flux-mirror/api/v1beta2"
+	"github.com/fluxcd/flux-mirror/internal/helmrepo"
+	"github.com/fluxcd/flux-mirror/internal/hooks"
 	"github.com/fluxcd/flux-mirror/internal/oci"
 	"github.com/fluxcd/flux-mirror/internal/sync"
 	"github.com/fluxcd/flux-mirror/internal/testregistry"
@@ -318,4 +325,158 @@ func TestChartsMirror_DryRun(t *testing.T) {
 	// Destination must remain empty.
 	_, err = c.ListTags(context.Background(), dst+"/podinfo")
 	g.Expect(err).To(HaveOccurred(), "destination repo should not exist after dry-run")
+}
+
+func TestChartsMirror_HelmHookBlocksCopyWithoutProvenance(t *testing.T) {
+	g := NewWithT(t)
+	srcURL := newHTTPHelmRepo(t, "1.0.0")
+	dst := testregistry.Repo(dockerReg, "charts-hook-no-prov")
+	c := oci.NewClient(oci.Insecure())
+	entry := apiv1.ChartEntry{
+		Source:      srcURL,
+		Destination: "oci://" + dst,
+		Name:        "podinfo",
+		Selector:    apiv1.Selector{Limit: new(1)},
+		Hooks: &apiv1.ArtifactHooks{Pre: []apiv1.HookStep{{
+			Name:     "verify-provenance",
+			Provider: apiv1.HookProviderHelm,
+			Helm:     &apiv1.HelmHookConfig{PublicKey: "test key"},
+		}}},
+	}
+	mirror, err := New(c, entry, Options{
+		Logger:   discardLogger(),
+		Insecure: true,
+		HookBuilders: map[string]hooks.Builder{
+			apiv1.HookProviderHelm: func(apiv1.HookStep) (hooks.Step, error) {
+				return hooks.StepFunc(func(ctx context.Context, input hooks.Input) (hooks.Outcome, error) {
+					if input.HelmChart == nil {
+						return hooks.Outcome{}, fmt.Errorf("chart package input is missing")
+					}
+					_, _, err := input.HelmChart.FetchProvenance(ctx)
+					if errors.Is(err, helmrepo.ErrProvenanceNotFound) {
+						return hooks.Outcome{Verdict: apiv1.StepVerdictDeny, Reason: "provenance is required"}, nil
+					}
+					return hooks.Outcome{}, err
+				}), nil
+			},
+		},
+	})
+	g.Expect(err).ToNot(HaveOccurred())
+
+	res, err := newRunner().Run(context.Background(), []sync.EntryMirror{mirror})
+
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(versionsWithStatus(res.Entries[0], apiv1.StatusBlocked)).To(Equal([]string{"1.0.0"}))
+	row, ok := rowByTag(res.Entries[0], "1.0.0")
+	g.Expect(ok).To(BeTrue())
+	g.Expect(row.Steps).To(HaveLen(1))
+	g.Expect(row.Steps[0].Verdict).To(Equal(apiv1.StepVerdictDeny))
+	_, err = c.ListTags(context.Background(), dst+"/podinfo")
+	g.Expect(err).To(HaveOccurred(), "the chart must not be copied after a provenance denial")
+}
+
+func TestChartsMirror_HooksAreSkippedForUpToDateVersions(t *testing.T) {
+	g := NewWithT(t)
+	srcURL := newHTTPHelmRepo(t, "1.0.0")
+	dst := testregistry.Repo(dockerReg, "charts-hook-up-to-date")
+	c := oci.NewClient(oci.Insecure())
+	pushHelmFixture(t, c, dst+"/podinfo:1.0.0", "1.0.0")
+	entry := apiv1.ChartEntry{
+		Source:      srcURL,
+		Destination: "oci://" + dst,
+		Name:        "podinfo",
+		Selector:    apiv1.Selector{Limit: new(1)},
+		Hooks: &apiv1.ArtifactHooks{Pre: []apiv1.HookStep{{
+			Name:     "verify-provenance",
+			Provider: apiv1.HookProviderHelm,
+			Helm:     &apiv1.HelmHookConfig{PublicKey: "invalid key"},
+		}}},
+	}
+	mirror, err := New(c, entry, Options{
+		Logger:   discardLogger(),
+		Insecure: true,
+	})
+	g.Expect(err).ToNot(HaveOccurred())
+
+	res, err := newRunner().Run(context.Background(), []sync.EntryMirror{mirror})
+
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(versionsWithStatus(res.Entries[0], apiv1.StatusSkipped)).To(Equal([]string{"1.0.0"}))
+	row, ok := rowByTag(res.Entries[0], "1.0.0")
+	g.Expect(ok).To(BeTrue())
+	g.Expect(row.Steps).To(HaveLen(1))
+	g.Expect(row.Steps[0].Verdict).To(Equal(apiv1.StepVerdictSkip))
+	g.Expect(row.Steps[0].Reason).To(Equal(apiv1.ReasonUpToDate))
+}
+
+func TestChartsMirror_VerifiesSignedHelmRepositoryChart(t *testing.T) {
+	g := NewWithT(t)
+	srcURL, publicKey := newSignedHelmRepo(t, "1.0.0")
+	dst := testregistry.Repo(dockerReg, "charts-hook-helm-provenance")
+	entry := apiv1.ChartEntry{
+		Source:      srcURL,
+		Destination: "oci://" + dst,
+		Name:        "podinfo",
+		Selector:    apiv1.Selector{Limit: new(1)},
+		Hooks: &apiv1.ArtifactHooks{Pre: []apiv1.HookStep{{
+			Name:     "verify-provenance",
+			Provider: apiv1.HookProviderHelm,
+			Helm:     &apiv1.HelmHookConfig{PublicKey: publicKey},
+		}}},
+	}
+	mirror, err := New(oci.NewClient(oci.Insecure()), entry, Options{
+		Logger:   discardLogger(),
+		Insecure: true,
+	})
+	g.Expect(err).ToNot(HaveOccurred())
+
+	res, err := newRunner().Run(context.Background(), []sync.EntryMirror{mirror})
+
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(versionsWithStatus(res.Entries[0], apiv1.StatusCopied)).To(Equal([]string{"1.0.0"}))
+	row, ok := rowByTag(res.Entries[0], "1.0.0")
+	g.Expect(ok).To(BeTrue())
+	g.Expect(row.Steps).To(HaveLen(1))
+	g.Expect(row.Steps[0].Provider).To(Equal(apiv1.HookProviderHelm))
+	g.Expect(row.Steps[0].Verdict).To(Equal(apiv1.StepVerdictAllow))
+}
+
+func newSignedHelmRepo(t *testing.T, version string) (string, string) {
+	t.Helper()
+	testregistry.UseEmptyDockerConfig(t)
+	srv, err := helmtestserver.NewTempHelmServer()
+	if err != nil {
+		t.Fatalf("new Helm test server: %s", err)
+	}
+	t.Cleanup(srv.Stop)
+	publicKeyPath := filepath.Join(srv.Root(), "public.pgp")
+	if err := srv.PackageSignedChartWithVersion(fixtureChart, version, publicKeyPath); err != nil {
+		t.Fatalf("package signed chart: %s", err)
+	}
+	if err := srv.GenerateIndex(); err != nil {
+		t.Fatalf("generate index: %s", err)
+	}
+	publicKeyBytes, err := os.ReadFile(publicKeyPath)
+	if err != nil {
+		t.Fatalf("read generated PGP public key: %s", err)
+	}
+	entities, err := openpgp.ReadKeyRing(bytes.NewReader(publicKeyBytes))
+	if err != nil {
+		t.Fatalf("parse generated PGP public key: %s", err)
+	}
+	var armored bytes.Buffer
+	writer, err := armor.Encode(&armored, openpgp.PublicKeyType, nil)
+	if err != nil {
+		t.Fatalf("armor generated PGP public key: %s", err)
+	}
+	for _, entity := range entities {
+		if err := entity.Serialize(writer); err != nil {
+			t.Fatalf("serialize PGP public key: %s", err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close armored PGP public key: %s", err)
+	}
+	srv.Start()
+	return srv.URL(), armored.String()
 }

@@ -169,7 +169,7 @@ recorded the same way and the tag is copied. A too-new cosign signature is a
 | Key        | Description                                                        |
 |------------|--------------------------------------------------------------------|
 | `name`     | Configured step name.                                              |
-| `provider` | Hook provider, `cosign` or `wizcli`.                               |
+| `provider` | Hook provider: `cosign`, `wizcli`, or chart-only `helm`.             |
 | `verdict`  | `allow`, `deny`, `skip`, or `error`.                                |
 | `reason`   | Provider explanation for a deny or skip.                           |
 | `error`    | Infrastructure error after retries.                                |

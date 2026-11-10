@@ -7,11 +7,13 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"sync"
 	"time"
 
@@ -27,6 +29,8 @@ const (
 	maxIndexSize = 50 << 20
 	// maxChartSize bounds how much of a chart .tgz we'll read.
 	maxChartSize = 100 << 20
+	// maxProvenanceSize bounds how much of an optional PGP provenance file we'll read.
+	maxProvenanceSize = 10 << 20
 )
 
 // HTTPSource is a Helm chart source backed by an HTTP/S Helm repository
@@ -97,22 +101,63 @@ func (s *HTTPSource) ListVersions(ctx context.Context, chartName string) ([]stri
 // download URL is whatever the index entry points at, resolved against the
 // repo base — most repos use relative URLs (e.g. `nginx-1.2.3.tgz`).
 func (s *HTTPSource) Download(ctx context.Context, chartName, version string) ([]byte, error) {
-	idx, err := s.loadIndex(ctx)
+	chartURL, _, err := s.chartURL(ctx, chartName, version)
 	if err != nil {
 		return nil, err
 	}
+	return s.fetch(ctx, chartURL, maxChartSize)
+}
+
+// DownloadProvenance fetches the .prov sidecar beside the chart package.
+// The returned filename is the chart URL basename recorded in the provenance
+// file's signed checksum map.
+func (s *HTTPSource) DownloadProvenance(ctx context.Context, chartName, version string) ([]byte, string, error) {
+	chartURL, filename, err := s.chartURL(ctx, chartName, version)
+	if err != nil {
+		return nil, "", err
+	}
+	provURL, err := url.Parse(chartURL)
+	if err != nil {
+		return nil, "", fmt.Errorf("parse chart URL %q: %w", chartURL, err)
+	}
+	provURL.Path += ".prov"
+	provURL.RawPath = ""
+	data, err := s.fetch(ctx, provURL.String(), maxProvenanceSize)
+	if err != nil {
+		var statusErr *httpStatusError
+		if errors.As(err, &statusErr) && statusErr.status == http.StatusNotFound {
+			return nil, filename, ErrProvenanceNotFound
+		}
+		return nil, filename, fmt.Errorf("download chart provenance: %w", err)
+	}
+	return data, filename, nil
+}
+
+func (s *HTTPSource) chartURL(ctx context.Context, chartName, version string) (string, string, error) {
+	idx, err := s.loadIndex(ctx)
+	if err != nil {
+		return "", "", err
+	}
 	cv, err := idx.Get(chartName, version)
 	if err != nil {
-		return nil, fmt.Errorf("lookup chart %q@%q in index: %w", chartName, version, err)
+		return "", "", fmt.Errorf("lookup chart %q@%q in index: %w", chartName, version, err)
 	}
 	if len(cv.URLs) == 0 {
-		return nil, fmt.Errorf("chart %q@%q has no URLs in index", chartName, version)
+		return "", "", fmt.Errorf("chart %q@%q has no URLs in index", chartName, version)
 	}
 	chartURL, err := repo.ResolveReferenceURL(s.repoURL, cv.URLs[0])
 	if err != nil {
-		return nil, fmt.Errorf("resolve chart URL %q against %q: %w", cv.URLs[0], s.repoURL, err)
+		return "", "", fmt.Errorf("resolve chart URL %q against %q: %w", cv.URLs[0], s.repoURL, err)
 	}
-	return s.fetch(ctx, chartURL, maxChartSize)
+	parsed, err := url.Parse(chartURL)
+	if err != nil {
+		return "", "", fmt.Errorf("parse chart URL %q: %w", chartURL, err)
+	}
+	filename := path.Base(parsed.Path)
+	if filename == "." || filename == "/" || filename == "" {
+		return "", "", fmt.Errorf("chart URL %q has no file name", chartURL)
+	}
+	return chartURL, filename, nil
 }
 
 // loadIndex fetches and parses index.yaml exactly once across all calls.
@@ -175,7 +220,7 @@ func (s *HTTPSource) fetch(ctx context.Context, target string, maxBytes int64) (
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GET %s: status %d", target, resp.StatusCode)
+		return nil, &httpStatusError{target: target, status: resp.StatusCode}
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
@@ -185,6 +230,15 @@ func (s *HTTPSource) fetch(ctx context.Context, target string, maxBytes int64) (
 		return nil, fmt.Errorf("response from %s exceeds %d bytes", target, maxBytes)
 	}
 	return data, nil
+}
+
+type httpStatusError struct {
+	target string
+	status int
+}
+
+func (e *httpStatusError) Error() string {
+	return fmt.Sprintf("GET %s: status %d", e.target, e.status)
 }
 
 func (s *HTTPSource) setAuth(req *http.Request) error {

@@ -30,6 +30,8 @@ const (
 	HookProviderCosign = "cosign"
 	// HookProviderWizcli selects Wiz CLI vulnerability and policy scans in hooks.
 	HookProviderWizcli = "wizcli"
+	// HookProviderHelm verifies chart provenance files in hooks.
+	HookProviderHelm = "helm"
 
 	// HookActionBlock stops the tag when a hook step denies it or errors.
 	HookActionBlock = "block"
@@ -476,6 +478,11 @@ type ChartEntry struct {
 	// semver filter applies, so prereleases are included.
 	Selector Selector `json:"selector"`
 
+	// Hooks configures checks that run before a chart version is published.
+	// Helm provenance hooks require a .prov file alongside the chart package.
+	// +optional
+	Hooks *ArtifactHooks `json:"hooks,omitempty"`
+
 	// Overwrite re-mirrors versions that already exist at the destination.
 	// +optional
 	Overwrite bool `json:"overwrite,omitempty"`
@@ -566,20 +573,21 @@ type ArtifactVerification struct {
 	MinAge *metav1.Duration `json:"minAge,omitempty"`
 }
 
-// ArtifactHooks configures ordered per-tag hook steps.
+// ArtifactHooks configures ordered pre-copy hook steps for artifact tags or
+// chart versions.
 type ArtifactHooks struct {
-	// Pre lists checks to run before a tag is copied.
+	// Pre lists checks to run before a tag or chart version is copied.
 	// +optional
 	Pre []HookStep `json:"pre,omitempty"`
 }
 
 // HookStep configures one pre-copy hook.
 type HookStep struct {
-	// Name is a unique identifier for this step within the artifact entry.
+	// Name is a unique identifier for this step within the entry.
 	Name string `json:"name"`
 
 	// Provider selects the hook implementation.
-	// +kubebuilder:validation:Enum=cosign;wizcli
+	// +kubebuilder:validation:Enum=cosign;wizcli;helm
 	Provider string `json:"provider"`
 
 	// Timeout is the total time allowed for this step, including retries.
@@ -620,6 +628,22 @@ type HookStep struct {
 	// Wizcli configures Wiz CLI scans for this step.
 	// +optional
 	Wizcli *WizcliHookConfig `json:"wizcli,omitempty"`
+
+	// Helm configures PGP verification of a classic Helm chart .prov file.
+	// It is only valid on charts sourced from HTTP/S Helm repositories.
+	// +optional
+	Helm *HelmHookConfig `json:"helm,omitempty"`
+}
+
+// HelmHookConfig configures PGP verification of a chart's .prov provenance
+// file. The public key is trusted directly and is never fetched from the
+// chart repository.
+type HelmHookConfig struct {
+	// PublicKey is a standard ASCII-armored PGP public key. Its armor headers
+	// must be separated from the body by the standard blank line. Multiple
+	// public key blocks may be concatenated for key rotation.
+	// +kubebuilder:validation:MinLength=1
+	PublicKey string `json:"publicKey"`
 }
 
 // CosignHookConfig configures cosign verification for a hook. The embedded

@@ -21,6 +21,14 @@ type Input struct {
 	Tag         string
 	Destination string
 	Digest      string
+	HelmChart   *HelmChartInput
+}
+
+// HelmChartInput carries the downloaded package and optional provenance
+// sidecar to a Helm-specific hook.
+type HelmChartInput struct {
+	Archive         []byte
+	FetchProvenance func(context.Context) ([]byte, string, error)
 }
 
 // Outcome is the policy decision and typed provider result from one unit.
@@ -164,15 +172,29 @@ func NewRunner(config apiv1.ArtifactHooks, defaultTimeout time.Duration, builder
 func (r *Runner) SkippedSteps(reason string) []apiv1.StepResult {
 	steps := make([]apiv1.StepResult, 0, len(r.steps))
 	for _, step := range r.steps {
-		steps = append(steps, apiv1.StepResult{
-			Name:     step.config.Name,
-			Provider: step.config.Provider,
-			Verdict:  apiv1.StepVerdictSkip,
-			Reason:   reason,
-			Duration: time.Duration(0).String(),
-		})
+		steps = append(steps, skippedStepResult(step.config, reason))
 	}
 	return steps
+}
+
+// SkippedStepsForConfig returns configured steps as skipped without building
+// their providers.
+func SkippedStepsForConfig(config []apiv1.HookStep, reason string) []apiv1.StepResult {
+	steps := make([]apiv1.StepResult, 0, len(config))
+	for _, step := range config {
+		steps = append(steps, skippedStepResult(step, reason))
+	}
+	return steps
+}
+
+func skippedStepResult(config apiv1.HookStep, reason string) apiv1.StepResult {
+	return apiv1.StepResult{
+		Name:     config.Name,
+		Provider: config.Provider,
+		Verdict:  apiv1.StepVerdictSkip,
+		Reason:   reason,
+		Duration: time.Duration(0).String(),
+	}
 }
 
 // Run executes each step in order and stops on a deny or skip verdict.

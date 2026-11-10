@@ -31,7 +31,7 @@
             "description": "Hooks configures checks that run before an artifact is copied.",
             "properties": {
               "pre": {
-                "description": "Pre lists checks to run before a tag is copied.",
+                "description": "Pre lists checks to run before a tag or chart version is copied.",
                 "items": {
                   "additionalProperties": false,
                   "description": "HookStep configures one pre-copy hook.",
@@ -235,8 +235,23 @@
                       ],
                       "type": "object"
                     },
+                    "helm": {
+                      "additionalProperties": false,
+                      "description": "Helm configures PGP verification of a classic Helm chart .prov file.\nIt is only valid on charts sourced from HTTP/S Helm repositories.",
+                      "properties": {
+                        "publicKey": {
+                          "description": "PublicKey is a standard ASCII-armored PGP public key. Its armor headers\nmust be separated from the body by the standard blank line. Multiple\npublic key blocks may be concatenated for key rotation.",
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "publicKey"
+                      ],
+                      "type": "object"
+                    },
                     "name": {
-                      "description": "Name is a unique identifier for this step within the artifact entry.",
+                      "description": "Name is a unique identifier for this step within the entry.",
                       "type": "string"
                     },
                     "onDeny": {
@@ -259,7 +274,8 @@
                       "description": "Provider selects the hook implementation.",
                       "enum": [
                         "cosign",
-                        "wizcli"
+                        "wizcli",
+                        "helm"
                       ],
                       "type": "string"
                     },
@@ -442,6 +458,308 @@
               "artifactory"
             ],
             "type": "string"
+          },
+          "hooks": {
+            "additionalProperties": false,
+            "description": "Hooks configures checks that run before a chart version is published.\nHelm provenance hooks require a .prov file alongside the chart package.",
+            "properties": {
+              "pre": {
+                "description": "Pre lists checks to run before a tag or chart version is copied.",
+                "items": {
+                  "additionalProperties": false,
+                  "description": "HookStep configures one pre-copy hook.",
+                  "properties": {
+                    "concurrency": {
+                      "description": "Concurrency caps the number of work units executing this step at once. A\nwork unit is one verification or scan task: a tag for cosign, one tag and\nplatform for wizcli. Defaults to 1.",
+                      "type": "integer"
+                    },
+                    "cosign": {
+                      "additionalProperties": false,
+                      "description": "Cosign configures cosign verification for this step.",
+                      "properties": {
+                        "attestations": {
+                          "description": "Attestations lists the attestations that must be attached to the digest,\neach with its own verifier. They are read from the cosign tag-based .att\ntag of the verified digest.",
+                          "items": {
+                            "additionalProperties": false,
+                            "description": "CosignAttestation is an attestation of one predicate type that must be\nattached to a digest. It names its own verifier, which is not inherited from\nthe signature, because attestations are often signed by another identity\n(for example the SLSA generator).",
+                            "properties": {
+                              "matchOIDCIdentity": {
+                                "description": "MatchOIDCIdentity lists the Fulcio certificate identities to accept\n(keyless). It cannot be combined with PublicKey.",
+                                "items": {
+                                  "additionalProperties": false,
+                                  "description": "OIDCIdentity matches a Fulcio certificate identity.",
+                                  "properties": {
+                                    "issuer": {
+                                      "description": "Issuer is the OIDC issuer URL of the signing identity.",
+                                      "type": "string"
+                                    },
+                                    "subject": {
+                                      "description": "Subject is a regexp matched against the certificate subject.",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "issuer",
+                                    "subject"
+                                  ],
+                                  "type": "object"
+                                },
+                                "type": "array"
+                              },
+                              "publicKey": {
+                                "description": "PublicKey is a PEM-encoded public key (ECDSA, RSA or Ed25519) that must\nhave made the signature (key-based, as with cosign sign --key). The\nsignature must also be in a transparency log. It cannot be combined with\nMatchOIDCIdentity.",
+                                "type": "string"
+                              },
+                              "type": {
+                                "description": "Type is the predicate type, as a short alias (spdx, slsa-provenance,\ncyclonedx) or a full predicate type URI.",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "platform": {
+                          "additionalProperties": false,
+                          "description": "Platform verifies the platform manifests listed in it, each as its own\nwork unit, in addition to the digest covered by the embedded policy.",
+                          "properties": {
+                            "attestations": {
+                              "description": "Attestations lists the attestations that must be attached to the digest,\neach with its own verifier. They are read from the cosign tag-based .att\ntag of the verified digest.",
+                              "items": {
+                                "additionalProperties": false,
+                                "description": "CosignAttestation is an attestation of one predicate type that must be\nattached to a digest. It names its own verifier, which is not inherited from\nthe signature, because attestations are often signed by another identity\n(for example the SLSA generator).",
+                                "properties": {
+                                  "matchOIDCIdentity": {
+                                    "description": "MatchOIDCIdentity lists the Fulcio certificate identities to accept\n(keyless). It cannot be combined with PublicKey.",
+                                    "items": {
+                                      "additionalProperties": false,
+                                      "description": "OIDCIdentity matches a Fulcio certificate identity.",
+                                      "properties": {
+                                        "issuer": {
+                                          "description": "Issuer is the OIDC issuer URL of the signing identity.",
+                                          "type": "string"
+                                        },
+                                        "subject": {
+                                          "description": "Subject is a regexp matched against the certificate subject.",
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "issuer",
+                                        "subject"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "type": "array"
+                                  },
+                                  "publicKey": {
+                                    "description": "PublicKey is a PEM-encoded public key (ECDSA, RSA or Ed25519) that must\nhave made the signature (key-based, as with cosign sign --key). The\nsignature must also be in a transparency log. It cannot be combined with\nMatchOIDCIdentity.",
+                                    "type": "string"
+                                  },
+                                  "type": {
+                                    "description": "Type is the predicate type, as a short alias (spdx, slsa-provenance,\ncyclonedx) or a full predicate type URI.",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "type"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "platforms": {
+                              "description": "Platforms lists the platforms to verify, each as os/arch or os/arch/variant\n(for example linux/amd64). Every platform is its own work unit, and a\nplatform missing from the image index is an error.",
+                              "items": {
+                                "type": "string"
+                              },
+                              "minItems": 1,
+                              "type": "array"
+                            },
+                            "signature": {
+                              "additionalProperties": false,
+                              "description": "Signature is the signature to verify. It is always checked first.",
+                              "properties": {
+                                "matchOIDCIdentity": {
+                                  "description": "MatchOIDCIdentity lists the Fulcio certificate identities to accept\n(keyless). It cannot be combined with PublicKey.",
+                                  "items": {
+                                    "additionalProperties": false,
+                                    "description": "OIDCIdentity matches a Fulcio certificate identity.",
+                                    "properties": {
+                                      "issuer": {
+                                        "description": "Issuer is the OIDC issuer URL of the signing identity.",
+                                        "type": "string"
+                                      },
+                                      "subject": {
+                                        "description": "Subject is a regexp matched against the certificate subject.",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "issuer",
+                                      "subject"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "type": "array"
+                                },
+                                "minAge": {
+                                  "description": "MinAge requires the signature to be at least this old before mirroring.\nIt applies to the signature only, not to attestations.",
+                                  "type": "string"
+                                },
+                                "publicKey": {
+                                  "description": "PublicKey is a PEM-encoded public key (ECDSA, RSA or Ed25519) that must\nhave made the signature (key-based, as with cosign sign --key). The\nsignature must also be in a transparency log. It cannot be combined with\nMatchOIDCIdentity.",
+                                  "type": "string"
+                                }
+                              },
+                              "type": "object"
+                            }
+                          },
+                          "required": [
+                            "platforms",
+                            "signature"
+                          ],
+                          "type": "object"
+                        },
+                        "signature": {
+                          "additionalProperties": false,
+                          "description": "Signature is the signature to verify. It is always checked first.",
+                          "properties": {
+                            "matchOIDCIdentity": {
+                              "description": "MatchOIDCIdentity lists the Fulcio certificate identities to accept\n(keyless). It cannot be combined with PublicKey.",
+                              "items": {
+                                "additionalProperties": false,
+                                "description": "OIDCIdentity matches a Fulcio certificate identity.",
+                                "properties": {
+                                  "issuer": {
+                                    "description": "Issuer is the OIDC issuer URL of the signing identity.",
+                                    "type": "string"
+                                  },
+                                  "subject": {
+                                    "description": "Subject is a regexp matched against the certificate subject.",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "issuer",
+                                  "subject"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "minAge": {
+                              "description": "MinAge requires the signature to be at least this old before mirroring.\nIt applies to the signature only, not to attestations.",
+                              "type": "string"
+                            },
+                            "publicKey": {
+                              "description": "PublicKey is a PEM-encoded public key (ECDSA, RSA or Ed25519) that must\nhave made the signature (key-based, as with cosign sign --key). The\nsignature must also be in a transparency log. It cannot be combined with\nMatchOIDCIdentity.",
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "signature"
+                      ],
+                      "type": "object"
+                    },
+                    "helm": {
+                      "additionalProperties": false,
+                      "description": "Helm configures PGP verification of a classic Helm chart .prov file.\nIt is only valid on charts sourced from HTTP/S Helm repositories.",
+                      "properties": {
+                        "publicKey": {
+                          "description": "PublicKey is a standard ASCII-armored PGP public key. Its armor headers\nmust be separated from the body by the standard blank line. Multiple\npublic key blocks may be concatenated for key rotation.",
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "publicKey"
+                      ],
+                      "type": "object"
+                    },
+                    "name": {
+                      "description": "Name is a unique identifier for this step within the entry.",
+                      "type": "string"
+                    },
+                    "onDeny": {
+                      "description": "OnDeny controls what a policy denial does: \"block\" stops the tag, which\nis reported as blocked, and \"warn\" records the denial and lets the tag\ncontinue to the next step and the copy. Defaults to \"block\".",
+                      "enum": [
+                        "block",
+                        "warn"
+                      ],
+                      "type": "string"
+                    },
+                    "onError": {
+                      "description": "OnError controls what an exhausted infrastructure error does (a timeout,\na crashed tool, an unreachable registry): \"block\" fails the tag and\n\"warn\" records the error and lets the tag continue. A policy denial is\nnot an error; see OnDeny. Defaults to \"block\".",
+                      "enum": [
+                        "block",
+                        "warn"
+                      ],
+                      "type": "string"
+                    },
+                    "provider": {
+                      "description": "Provider selects the hook implementation.",
+                      "enum": [
+                        "cosign",
+                        "wizcli",
+                        "helm"
+                      ],
+                      "type": "string"
+                    },
+                    "retries": {
+                      "description": "Retries is the number of extra attempts after an infrastructure error.\nDefaults to 0.",
+                      "type": "integer"
+                    },
+                    "timeout": {
+                      "description": "Timeout is the total time allowed for this step, including retries.\nDefaults to the sync --timeout.",
+                      "type": "string"
+                    },
+                    "wizcli": {
+                      "additionalProperties": false,
+                      "description": "Wizcli configures Wiz CLI scans for this step.",
+                      "properties": {
+                        "binary": {
+                          "description": "Binary is the wizcli executable. Defaults to wizcli, resolved on PATH.",
+                          "type": "string"
+                        },
+                        "platforms": {
+                          "description": "Platforms lists the platforms to scan, each as os/arch or os/arch/variant\n(for example linux/amd64). Every platform is scanned as its own work unit;\nthe tag passes only when all of them pass. A platform missing from the\nsource image index is an error.",
+                          "items": {
+                            "type": "string"
+                          },
+                          "minItems": 1,
+                          "type": "array"
+                        },
+                        "policies": {
+                          "description": "Policies lists the Wiz policies to apply. When omitted, wizcli evaluates\nevery policy of the account that applies to CLI scans.",
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "platforms"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "provider"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
           },
           "ignoreDriftForExitCode": {
             "description": "IgnoreDriftForExitCode still reports and logs drifted versions, but\nexcludes them from the drift exit code. When every drifted version\nbelongs to an entry with this field set, the run does not exit with the\n--drift-exit-code value.",

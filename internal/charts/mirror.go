@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package charts implements sync.EntryMirror for ChartEntry config entries.
-// It downloads chart .tgz bytes from the source (HTTP/S or OCI), then publishes
+// It downloads chart .tgz bytes from an HTTP/S Helm repository, then publishes
 // them to the destination: as a deterministic Helm-OCI artifact
 // (destinationType "oci") or as a .tgz uploaded to a JFrog Artifactory Helm
 // repository (destinationType "artifactory").
@@ -21,10 +21,12 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	stdsync "sync"
 	"time"
 
 	apiv1 "github.com/fluxcd/flux-mirror/api/v1beta2"
 	"github.com/fluxcd/flux-mirror/internal/helmrepo"
+	"github.com/fluxcd/flux-mirror/internal/hooks"
 	"github.com/fluxcd/flux-mirror/internal/oci"
 	"github.com/fluxcd/flux-mirror/internal/selector"
 	"github.com/fluxcd/flux-mirror/internal/sync"
@@ -41,6 +43,11 @@ type Options struct {
 	// Verbose toggles selector debug output (logs versions excluded by
 	// the semver constraint with reasons).
 	Verbose bool
+	// HookTimeout is the fallback timeout for chart hook steps.
+	HookTimeout time.Duration
+	// HookBuilders override the built-in Helm provenance provider. Primarily
+	// used by tests.
+	HookBuilders map[string]hooks.Builder
 	// Logger is used for warnings and per-version progress lines.
 	Logger *slog.Logger
 
@@ -61,15 +68,21 @@ func New(client *oci.Client, entry apiv1.ChartEntry, opts Options) (sync.EntryMi
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
+	if opts.HookTimeout <= 0 {
+		opts.HookTimeout = 5 * time.Minute
+	}
 	return &mirror{client: client, entry: entry, opts: opts}, nil
 }
 
 type mirror struct {
-	client *oci.Client
-	entry  apiv1.ChartEntry
-	opts   Options
-	source helmrepo.Source // set by Plan
-	sink   sink            // set by Plan
+	client         *oci.Client
+	entry          apiv1.ChartEntry
+	opts           Options
+	source         helmrepo.Source // set by Plan
+	sink           sink            // set by Plan
+	hooks          *hooks.Runner   // initialized on first copy
+	hookRunnerOnce stdsync.Once
+	hookRunnerErr  error
 }
 
 // newSink builds the destination for the entry. It runs in Plan, not New, so a
@@ -151,7 +164,9 @@ func (m *mirror) Plan(ctx context.Context) (sync.Plan, error) {
 		plan.Jobs = append(plan.Jobs, sync.Job{
 			ID:  version,
 			Dst: job.dst,
-			Run: func(jctx context.Context) (sync.JobResult, error) { return m.runVersion(jctx, job) },
+			Run: func(jctx context.Context) (sync.JobResult, error) {
+				return m.runVersion(jctx, job)
+			},
 		})
 	}
 	return plan, nil
@@ -199,12 +214,15 @@ func (m *mirror) mirrorVersion(ctx context.Context, j versionJob) (sync.JobResul
 		if m.opts.DryRun {
 			return sync.JobResult{Status: apiv1.StatusWouldCopy, Digest: srcLayerDigest}, nil
 		}
-		if err := m.sink.push(ctx, j.version, tgz, srcLayerDigest); err != nil {
-			return sync.JobResult{Digest: srcLayerDigest}, err
-		}
-		return sync.JobResult{Status: apiv1.StatusCopied, Digest: srcLayerDigest}, nil
+		return m.runHooksAndPush(ctx, j, tgz, srcLayerDigest, apiv1.StatusCopied)
 	case srcLayerDigest:
-		return sync.JobResult{Status: apiv1.StatusSkipped, Digest: srcLayerDigest, Reason: apiv1.ReasonUpToDate}, nil
+		result := sync.JobResult{
+			Status: apiv1.StatusSkipped, Digest: srcLayerDigest, Reason: apiv1.ReasonUpToDate,
+		}
+		if m.entry.Hooks != nil && len(m.entry.Hooks.Pre) > 0 {
+			result.Steps = hooks.SkippedStepsForConfig(m.entry.Hooks.Pre, apiv1.ReasonUpToDate)
+		}
+		return result, nil
 	default:
 		if !j.overwrite {
 			m.opts.Logger.Warn("destination chart drifted from source; skipping (overwrite=false)",
@@ -215,11 +233,77 @@ func (m *mirror) mirrorVersion(ctx context.Context, j versionJob) (sync.JobResul
 		if m.opts.DryRun {
 			return sync.JobResult{Status: apiv1.StatusWouldOverwrite, Digest: srcLayerDigest}, nil
 		}
-		if err := m.sink.push(ctx, j.version, tgz, srcLayerDigest); err != nil {
-			return sync.JobResult{Digest: srcLayerDigest}, err
-		}
-		return sync.JobResult{Status: apiv1.StatusOverwritten, Digest: srcLayerDigest}, nil
+		return m.runHooksAndPush(ctx, j, tgz, srcLayerDigest, apiv1.StatusOverwritten)
 	}
+}
+
+func (m *mirror) runHooksAndPush(
+	ctx context.Context,
+	job versionJob,
+	archive []byte,
+	digest string,
+	status apiv1.Status,
+) (sync.JobResult, error) {
+	var steps []apiv1.StepResult
+	if err := m.ensureHookRunner(); err != nil {
+		return sync.JobResult{Digest: digest}, err
+	}
+	if m.hooks != nil {
+		result, err := m.hooks.Run(ctx, hooks.Input{
+			Source:      m.planName(),
+			Tag:         job.version,
+			Destination: job.dst,
+			Digest:      digest,
+			HelmChart: &hooks.HelmChartInput{
+				Archive: archive,
+				FetchProvenance: func(ctx context.Context) ([]byte, string, error) {
+					return m.source.DownloadProvenance(ctx, m.entry.Name, job.version)
+				},
+			},
+		})
+		steps = result.Steps
+		if err != nil {
+			return sync.JobResult{Digest: digest, Steps: steps}, err
+		}
+		if result.Terminal != nil {
+			return sync.JobResult{
+				Status: result.Terminal.Status,
+				Reason: result.Terminal.Reason,
+				Digest: digest,
+				Steps:  steps,
+			}, nil
+		}
+	}
+	if err := m.sink.push(ctx, job.version, archive, digest); err != nil {
+		return sync.JobResult{Digest: digest, Steps: steps}, err
+	}
+	return sync.JobResult{Status: status, Digest: digest, Steps: steps}, nil
+}
+
+func (m *mirror) ensureHookRunner() error {
+	m.hookRunnerOnce.Do(func() {
+		m.hookRunnerErr = m.buildHookRunner()
+	})
+	return m.hookRunnerErr
+}
+
+func (m *mirror) buildHookRunner() error {
+	if m.entry.Hooks == nil || len(m.entry.Hooks.Pre) == 0 {
+		return nil
+	}
+	builders := m.opts.HookBuilders
+	if builders == nil {
+		builders = map[string]hooks.Builder{
+			apiv1.HookProviderHelm: hooks.HelmProvenanceBuilder(),
+		}
+	}
+	timeout := m.opts.HookTimeout
+	runner, err := hooks.NewRunner(*m.entry.Hooks, timeout, builders, hooks.WithLogger(m.opts.Logger))
+	if err != nil {
+		return err
+	}
+	m.hooks = runner
+	return nil
 }
 
 // planName is "<source>/<chart name>" with the source scheme made explicit

@@ -266,13 +266,14 @@ func syncCmdRun(cmd *cobra.Command, args []string) error {
 	}
 	for _, e := range cfg.Charts {
 		m, err := charts.New(client, e, charts.Options{
-			Overwrite: syncArgs.overwrite,
-			DryRun:    syncArgs.dryRun,
-			Verbose:   syncArgs.verbose,
-			Logger:    logger,
-			Hosts:     registryauth.HostsForDirection(cfg.Hosts, apiv1.DirectionDestination),
-			Transport: destTransport,
-			Insecure:  syncArgs.insecure,
+			Overwrite:   syncArgs.overwrite,
+			DryRun:      syncArgs.dryRun,
+			Verbose:     syncArgs.verbose,
+			HookTimeout: timeout,
+			Logger:      logger,
+			Hosts:       registryauth.HostsForDirection(cfg.Hosts, apiv1.DirectionDestination),
+			Transport:   destTransport,
+			Insecure:    syncArgs.insecure,
 		})
 		if err != nil {
 			return fmt.Errorf("build chart entry %s/%s: %w", e.Source, e.Name, err)

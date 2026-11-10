@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/fluxcd/pkg/helmtestserver"
@@ -88,6 +89,37 @@ func TestHTTPSource_Download_UnknownVersion(t *testing.T) {
 	src := NewHTTPSource(srv.URL())
 	_, err := src.Download(context.Background(), "podinfo", "9.9.9")
 	g.Expect(err).To(HaveOccurred())
+}
+
+func TestHTTPSource_DownloadProvenance(t *testing.T) {
+	g := NewWithT(t)
+	want := []byte("signed provenance")
+	srv := newHelmServerWithMiddleware(t, func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, ".tgz.prov") {
+				_, _ = w.Write(want)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}, "1.2.3")
+
+	src := NewHTTPSource(srv.URL())
+	got, filename, err := src.DownloadProvenance(context.Background(), "podinfo", "1.2.3")
+
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(got).To(Equal(want))
+	g.Expect(filename).To(Equal("podinfo-1.2.3.tgz"))
+}
+
+func TestHTTPSource_DownloadProvenanceMissing(t *testing.T) {
+	g := NewWithT(t)
+	srv := newHelmServer(t, "1.2.3")
+	src := NewHTTPSource(srv.URL())
+
+	_, _, err := src.DownloadProvenance(context.Background(), "podinfo", "1.2.3")
+
+	g.Expect(err).To(MatchError(ErrProvenanceNotFound))
 }
 
 // TestHTTPSource_IndexCachedOnce confirms that subsequent ListVersions calls
