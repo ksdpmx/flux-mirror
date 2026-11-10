@@ -76,7 +76,7 @@ func (m *mirror) gateTag(ctx context.Context, j *tagJob) (sync.GateResult, error
 
 	switch {
 	case cmp.State == oci.StateEqual:
-		return terminalGate(apiv1.StatusSkipped, apiv1.ReasonUpToDate, cmp.SrcDigest), nil
+		return m.upToDateGate(cmp.SrcDigest), nil
 	case cmp.State == oci.StateDrifted && !j.overwrite:
 		return terminalGate(apiv1.StatusDrifted, "", cmp.SrcDigest), nil
 	case m.opts.DryRun && cmp.State == oci.StateMissing:
@@ -112,7 +112,7 @@ func (m *mirror) gateChartTag(ctx context.Context, j *tagJob) (sync.GateResult, 
 
 	switch {
 	case dstDigest == chart.LayerDigest:
-		return terminalGate(apiv1.StatusSkipped, apiv1.ReasonUpToDate, chart.LayerDigest), nil
+		return m.upToDateGate(chart.LayerDigest), nil
 	case dstDigest != "" && !j.overwrite:
 		m.opts.Logger.Warn("destination chart drifted from source; skipping (overwrite=false)",
 			"src", j.src, "src_digest", chart.LayerDigest, "dst", target, "dst_digest", dstDigest)
@@ -144,6 +144,14 @@ func (m *mirror) runHooks(ctx context.Context, tag, destination, digest string) 
 		}
 	}
 	return gate, nil
+}
+
+// upToDateGate skips a tag the destination already has. The hooks do not run,
+// but they are listed as skipped so the report shows they were not forgotten.
+func (m *mirror) upToDateGate(digest string) sync.GateResult {
+	gate := terminalGate(apiv1.StatusSkipped, apiv1.ReasonUpToDate, digest)
+	gate.Steps = m.hooks.SkippedSteps(apiv1.ReasonUpToDate)
+	return gate
 }
 
 func terminalGate(status apiv1.Status, reason, digest string) sync.GateResult {

@@ -159,6 +159,22 @@ func NewRunner(config apiv1.ArtifactHooks, defaultTimeout time.Duration, builder
 	return r, nil
 }
 
+// SkippedSteps returns every configured step as skipped with reason, for a tag
+// the steps are not run for. No step ran, so there are no attempts.
+func (r *Runner) SkippedSteps(reason string) []apiv1.StepResult {
+	steps := make([]apiv1.StepResult, 0, len(r.steps))
+	for _, step := range r.steps {
+		steps = append(steps, apiv1.StepResult{
+			Name:     step.config.Name,
+			Provider: step.config.Provider,
+			Verdict:  apiv1.StepVerdictSkip,
+			Reason:   reason,
+			Duration: time.Duration(0).String(),
+		})
+	}
+	return steps
+}
+
 // Run executes each step in order and stops on a deny or skip verdict.
 // Infrastructure errors are retried; onError decides whether an exhausted
 // error blocks the tag or allows later steps to run, and onDeny does the same

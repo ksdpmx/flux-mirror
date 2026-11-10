@@ -286,7 +286,15 @@ func TestMirror_HooksSkipUpToDateAndDryRunTags(t *testing.T) {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(calls.Load()).To(Equal(int32(0)))
 			g.Expect(res.Entries[0].Tags[0].Status).To(Equal(tt.wantStatus))
-			g.Expect(res.Entries[0].Tags[0].Steps).To(BeEmpty())
+			steps := res.Entries[0].Tags[0].Steps
+			if !tt.upToDate {
+				g.Expect(steps).To(BeEmpty())
+				return
+			}
+			g.Expect(steps).To(HaveLen(1))
+			g.Expect(steps[0].Verdict).To(Equal(apiv1.StepVerdictSkip))
+			g.Expect(steps[0].Reason).To(Equal(apiv1.ReasonUpToDate))
+			g.Expect(steps[0].Attempts).To(BeZero())
 		})
 	}
 }

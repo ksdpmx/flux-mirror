@@ -74,8 +74,9 @@ func (p *progress) JobFinished(entry, id, dst string, res mirrorsync.JobResult, 
 
 // writeHookLines lists the pre-copy hook steps that ran for a tag as a tree
 // under its result line, in order: the verdict, how long the step took, and a
-// reason for a skip or a warning. A tag that no hook ran for (up-to-date,
-// drifted, no hooks configured) has none. Only the pre phase exists today;
+// reason for a skip or a warning. An up-to-date tag lists its steps as "skipped"
+// without a duration or reason, since none ran. A tag that no hook ran for (drifted, no
+// hooks configured) has none. Only the pre phase exists today;
 // label the phase here once a post phase is added.
 //
 // A step that denied the tag or errored but let it continue (onDeny or onError
@@ -89,6 +90,8 @@ func writeHookLines(b *strings.Builder, steps []apiv1.StepResult) {
 		}
 		verdict, reason := string(step.Verdict), ""
 		switch {
+		case step.Verdict == apiv1.StepVerdictSkip && step.Reason == apiv1.ReasonUpToDate:
+			verdict = "skipped"
 		case step.Verdict == apiv1.StepVerdictSkip:
 			reason = step.Reason
 		case step.Continued:
@@ -100,7 +103,7 @@ func writeHookLines(b *strings.Builder, steps []apiv1.StepResult) {
 			}
 		}
 		detail := verdict
-		if d, err := time.ParseDuration(step.Duration); err == nil {
+		if d, err := time.ParseDuration(step.Duration); err == nil && d > 0 {
 			detail += " (" + d.Round(10*time.Millisecond).String() + ")"
 		}
 		if reason != "" {

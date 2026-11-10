@@ -139,8 +139,10 @@ A step that denied the tag or errored but let it continue (`onDeny: warn` or
 `onError: warn`) is shown as `warn` with the failed policies or the first line of
 its error (cut at 120 characters), for example
 `pre hook vuln-scan: warn (5s): context deadline exceeded`; the report still
-records the real `verdict` and sets `continued: true`. Tags that no hook ran for (up-to-date, drifted,
-or no hooks configured) have none. A blocked tag prints the step that rejected
+records the real `verdict` and sets `continued: true`. An up-to-date tag lists
+its steps as `skipped` without a duration, because no hook ran; the report
+records them with the verdict `skip`, the reason `up-to-date` and zero attempts.
+Tags that no hook ran for (drifted, `--dry-run`, or no hooks configured) have none. A blocked tag prints the step that rejected
 it and, for `wizcli`, the policies that failed; it has no destination line
 because nothing was copied. Per-platform progress and retries are only logged
 with `--verbose`.
@@ -235,7 +237,8 @@ skipped) `reason`. Referrers are evaluated under `--dry-run` too.
 
 For `artifacts[].hooks.pre`, the runner compares source and destination first,
 then executes the hook chain only for tags that will be copied. Up-to-date and
-drifted tags, plus all tags under `--dry-run`, do not run hooks. Hook steps have
+drifted tags, plus all tags under `--dry-run`, do not run hooks; an up-to-date tag
+still lists its steps as skipped. Hook steps have
 their own timeout, concurrency, and retries; the copy's `--timeout` and
 `--retries` budget applies only after the gate allows it.
 

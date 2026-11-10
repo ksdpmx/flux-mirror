@@ -282,7 +282,8 @@ OCI 1.1 referrers API, falling back to cosign's legacy `sha256-<digest>.sig` tag
 discovery when no referrer bundle is present, and `wizcli`, which scans the
 image with the Wiz CLI (see [Wiz CLI scans](#wiz-cli-scans)). Steps run in
 order and the first step that denies, skips, or fails stops the chain. Hooks
-are not run for up-to-date or drifted tags, or under `--dry-run`; `charts[]`
+are not run for up-to-date or drifted tags, or under `--dry-run` (an up-to-date tag
+lists its steps as skipped); `charts[]`
 does not support hooks yet.
 
 Each step has a unique lowercase `.name`, a `.provider`, and exactly the

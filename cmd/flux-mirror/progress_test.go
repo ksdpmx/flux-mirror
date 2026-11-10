@@ -91,6 +91,21 @@ func TestProgressJobFinished(t *testing.T) {
 				"  └─ pre hook vuln-scan: allow (41.2s)\n",
 		},
 		{
+			name: "up-to-date tag lists its hooks as skipped without a duration",
+			res: syncpkg.JobResult{
+				Status: apiv1.StatusSkipped,
+				Reason: "up-to-date",
+				Steps: []apiv1.StepResult{
+					{Name: "signature", Verdict: apiv1.StepVerdictSkip, Reason: "up-to-date", Duration: "0s"},
+					{Name: "vuln-scan", Verdict: apiv1.StepVerdictSkip, Reason: "up-to-date", Duration: "0s"},
+				},
+			},
+			want: "✓ alpine:3.20 (skipped)\n" +
+				"→ localhost:5050/alpine:3.20\n" +
+				"  ├─ pre hook signature: skipped\n" +
+				"  └─ pre hook vuln-scan: skipped\n",
+		},
+		{
 			name: "skipped tag shows the skip reason of the hook",
 			res: syncpkg.JobResult{
 				Status: apiv1.StatusSkipped,
