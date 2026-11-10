@@ -170,6 +170,44 @@ func TestVerifyAttestationEntities(t *testing.T) {
 	}
 }
 
+func TestVerifyAttestationEntitiesAcceptsStringEncodedSPDXPredicate(t *testing.T) {
+	g := NewWithT(t)
+	sigstore, err := ca.NewVirtualSigstore()
+	g.Expect(err).ToNot(HaveOccurred())
+	digest := testDigest(t, "a")
+	statement, err := json.Marshal(map[string]any{
+		"_type":         "https://in-toto.io/Statement/v0.1",
+		"predicateType": spdxType,
+		"subject":       []map[string]any{{"name": "example", "digest": map[string]string{digest.Algorithm: digest.Hex}}},
+		"predicate":     `{"spdxVersion":"SPDX-2.3","packages":[]}`,
+	})
+	g.Expect(err).ToNot(HaveOccurred())
+	entity, err := sigstore.Attest(testIdentity, testIssuer, statement)
+	g.Expect(err).ToNot(HaveOccurred())
+
+	got, err := verifyAttestationEntities(
+		sigstore,
+		digest,
+		[]verify.SignedEntity{entity},
+		[]string{"spdx"},
+		identityPolicy(t),
+		attestationVerifierOptionsWithoutSCT(),
+	)
+
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(got).To(Equal([]string{spdxType}))
+
+	_, err = verifyAttestationEntities(
+		sigstore,
+		testDigest(t, "b"),
+		[]verify.SignedEntity{entity},
+		[]string{"spdx"},
+		identityPolicy(t),
+		attestationVerifierOptionsWithoutSCT(),
+	)
+	g.Expect(err).To(MatchError(ContainSubstring("no verified attestation of type")))
+}
+
 func TestVerifyAttestationEntitiesRejectsAnInvalidEntry(t *testing.T) {
 	g := NewWithT(t)
 	sigstore, err := ca.NewVirtualSigstore()

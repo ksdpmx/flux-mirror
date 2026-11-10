@@ -112,7 +112,7 @@ func (v *Verifier) VerifyAttestation(
 			return "", err
 		}
 		material = root.TrustedMaterialCollection{keys, trustedRoot}
-		verifierOptions = keyVerifierOptions()
+		verifierOptions = append(keyVerifierOptions(), verify.WithoutStatementPredicate())
 		policyOptions = []verify.PolicyOption{verify.WithKey()}
 	} else if policyOptions, err = certificateIdentityOptions(trust.Identities); err != nil {
 		return "", err
@@ -197,12 +197,24 @@ func (v *Verifier) ResolvePlatforms(ctx context.Context, ref string, platforms [
 
 // attestationVerifierOptions are the checks every keyless attestation must
 // pass: a signed certificate timestamp, and a transparency log entry with its
-// integrated timestamp.
+// integrated timestamp. The predicate is not materialized: verification only
+// needs the signed statement's subject and predicate type, and some producers
+// encode SPDX's predicate as a JSON string rather than an object.
 func attestationVerifierOptions() []verify.VerifierOption {
-	return []verify.VerifierOption{
+	options := attestationVerifierOptionsWithoutSCT()
+	return append([]verify.VerifierOption{
 		verify.WithSignedCertificateTimestamps(1),
+	}, options...)
+}
+
+// attestationVerifierOptionsWithoutSCT is the same as
+// attestationVerifierOptions, except for the SCT check used by the virtual
+// sigstore tests.
+func attestationVerifierOptionsWithoutSCT() []verify.VerifierOption {
+	return []verify.VerifierOption{
 		verify.WithIntegratedTimestamps(1),
 		verify.WithTransparencyLog(1),
+		verify.WithoutStatementPredicate(),
 	}
 }
 

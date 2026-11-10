@@ -801,12 +801,65 @@ scans a directory; both accept `--policies`, `--projects`, `--timeout`,
     an index, is a permanent error handled by `onError`, as for `wizcli`. Checked
     on the real images: for `cgr.dev/lexisnexislegal.com/amazon-k8s-cni-init` the
     index and both platforms have a `.sig` and the same four `.att` types.
-  - Still open: attestations through the referrers path (and the first-bundle
-    risk above), a `platform` block with a wildcard ("all platforms"), an
-    optional identity per attestation if one is ever signed by another identity,
-    and `.att` layers that cannot be read are skipped without a message (the
-    denial only names the missing type and the counts). The `sk8s-flux-mirror`
-    chart still renders the old top-level `cosign` fields.
+  - **Implemented: key-based signatures, and a separate trust for `signature` and
+    each attestation.** The config is now `cosign.index|platform.signature`
+    (`matchOIDCIdentity` or `publicKey`, plus `minAge`) and
+    `attestations: [{type, matchOIDCIdentity | publicKey}]`; an attestation names
+    its own trust and nothing is inherited (flux-cli's SLSA attestation is signed
+    by the SLSA generator, not by the image signer). `publicKey` is an inline PEM,
+    never taken from the bundle, and needs a transparency log entry. A legacy
+    `.sig` or `.att` layer without a certificate is a key-based bundle. Checked on
+    `public-registry.wiz.io/charts/wiz-sensor` (legacy `.sig` and key), on a local
+    image signed with `cosign sign --key` (referrers and key), on a local key
+    attestation, and on `ghcr.io/fluxcd/flux-cli` (referrers signature plus legacy
+    keyless `.att`). The discovery and verification layers are independent; see
+    `docs/config.md` for the support matrix.
+  - Still open: see S20. The `sk8s-flux-mirror` chart still renders the old flat
+    `cosign` fields and is not compatible with this config.
+- **S20. Gaps in `cosign` discovery and verification (not planned).** What is not
+  built, from the matrix of discovery (referrers, legacy tag) by verification
+  (keyless, key) for signatures and attestations:
+  - **Attestations through referrers: not supported** (keyless and key). cosign
+    v3 `attest` stores attestations as referrer bundles with a DSSE envelope, so
+    this is a real gap once publishers upgrade. Only the legacy `.att` tag is read.
+  - **The first-bundle risk in S18** (referrers take the first sigstore bundle,
+    whatever type) and the same for tag discovery: `.sig` takes the first
+    simplesigning layer, so a co-signed image is checked against one signer only
+    and can be denied wrongly.
+  - **One trust per signature.** `signature` is a single object, so there is no
+    list of keys for rotation (accept the old and the new key), and no "any of".
+    Changing it to a list later is a breaking change; decide before it is
+    published.
+  - **Key sources:** inline PEM only; no file path, KMS, HSM or Kubernetes
+    Secret. Only ECDSA P-256 was tested; RSA and Ed25519 load but are untested.
+  - **Trust root:** the public-good Sigstore (TUF) only; no private Fulcio, Rekor
+    or TUF. A signature that is not in a transparency log is always denied; there
+    is no switch to allow it (for example `--tlog-upload=false`).
+  - **Tests:** no oci-level unit test for key-based verification (the virtual
+    sigstore cannot sign with a key), only manual end-to-end runs; key-based
+    `platform` and `minAge` have only fake-verifier hook tests. A wrong key reports
+    `transparency log certificate does not match`, which reads as a different error
+    than it is.
+  - **Attestation content** is not inspected (for example the SLSA builder), and
+    an unreadable `.att` layer counts as missing without a message.
+  - **Signatures that are not cosign: not supported.**
+    - Docker Official Images (`docker.io/library/alpine:3.24.4`, checked): no
+      cosign `.sig`, `.att` or referrers, so a `cosign` step always denies. They
+      have Docker Content Trust (Notary v1): `notary.docker.io` lists 198 signed
+      tags for `library/alpine`, stored on the Notary server and not in the
+      registry. The signature chain was not verified. Not planned: Notary v1 is
+      old and flux-mirror reads only registry content. Pin the digest or scan
+      with `wizcli` instead.
+    - BuildKit attestations of those images (an `attestation-manifest` in the
+      image index per platform, with an SPDX SBOM and a SLSA provenance v0.2 as
+      raw in-toto statements) have no signature, certificate or log entry, so
+      there is no signer to verify. They are copied with the index. Reading them
+      would only be a consistency check and could be mistaken for a verification.
+    - Notation (Notary v2) signatures and Helm `.prov` (PGP) are not supported.
+  - `charts[]` has no `hooks`, so Helm charts are verified only as an OCI
+    artifact through `artifacts[]`; a chart is a single manifest, so only `index`
+    applies (`platform` is an error).
+  - A `platform` block cannot say "all platforms"; they are listed one by one.
 - **S19. Scanning an SBOM taken from a verified attestation (not planned; wizcli
   cannot do it).** Idea: verify the SPDX or CycloneDX attestation, extract the
   SBOM and scan it instead of pulling the image.
@@ -936,3 +989,15 @@ scans a directory; both accept `--policies`, `--projects`, `--timeout`,
   - Interacts with S12: if upstream withdraws a tag for security reasons, a
     prune would remove the copy, otherwise detection is left to scanning on the
     destination side.
+- **B9. Concurrent scheduling across entries (candidate; not planned).** Today
+  `sync.Runner` processes entries one after another; `--concurrency` fans out
+  tag jobs only within the current entry. Consider scheduling all
+  `entry × tag` jobs under a bounded global limit. A naive flattened queue can
+  let a large entry fill every worker and delay later entries; use fair
+  per-entry dispatch (for example round-robin) so each entry makes progress.
+  Planning must also be bounded and must not serialize all entries before tag
+  work begins. Define how the global budget interacts with per-step hook
+  `concurrency` and per-copy blob `CopyJobs` to avoid multiplying limits.
+  Preserve deterministic report order even when entries and tags finish out of
+  order. This is separate from B4, which moves `verify` out of serial planning
+  but does not parallelize entries.
