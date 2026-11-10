@@ -139,7 +139,7 @@ func TestCosignStep_VerifiesPinnedDigest(t *testing.T) {
 	stepConfig := apiv1.HookStep{
 		Name:     "signature",
 		Provider: apiv1.HookProviderCosign,
-		Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{Signature: signatureBy(apiv1.CosignVerifier{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
+		Cosign: &apiv1.CosignHookConfig{CosignPolicy: apiv1.CosignPolicy{Signature: signatureBy(apiv1.CosignVerifier{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
 			Issuer:  "https://token.actions.githubusercontent.com",
 			Subject: `^https://github\.com/example/.*$`,
 		}}})}},
@@ -155,7 +155,7 @@ func TestCosignStep_VerifiesPinnedDigest(t *testing.T) {
 	g.Expect(verifier.ref).To(Equal("ghcr.io/example/image@sha256:abc"))
 	g.Expect(verifier.discover).ToNot(BeNil())
 	g.Expect(verifier.cfg.Provider).To(Equal(apiv1.VerifyProviderCosign))
-	g.Expect(verifier.cfg.MatchOIDCIdentity).To(Equal(stepConfig.Cosign.Index.Signature.MatchOIDCIdentity))
+	g.Expect(verifier.cfg.MatchOIDCIdentity).To(Equal(stepConfig.Cosign.Signature.MatchOIDCIdentity))
 	g.Expect(outcome.Verdict).To(Equal(apiv1.StepVerdictAllow))
 	g.Expect(outcome.Cosign).To(Equal(&apiv1.Verification{
 		Provider:       apiv1.VerifyProviderCosign,
@@ -186,7 +186,7 @@ func TestCosignStep_SkipsTooNewSignature(t *testing.T) {
 	stepConfig := apiv1.HookStep{
 		Name:     "signature",
 		Provider: apiv1.HookProviderCosign,
-		Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{Signature: apiv1.CosignSignature{
+		Cosign: &apiv1.CosignHookConfig{CosignPolicy: apiv1.CosignPolicy{Signature: apiv1.CosignSignature{
 			CosignVerifier: apiv1.CosignVerifier{MatchOIDCIdentity: []apiv1.OIDCIdentity{{Issuer: "issuer", Subject: "subject"}}},
 			MinAge:         &metav1.Duration{Duration: minAge},
 		}}},
@@ -213,7 +213,7 @@ func TestCosignStep_MapsSignatureRejectionToDeny(t *testing.T) {
 	step, err := CosignBuilder(verifier)(apiv1.HookStep{
 		Name:     "signature",
 		Provider: apiv1.HookProviderCosign,
-		Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{Signature: signatureBy(apiv1.CosignVerifier{
+		Cosign: &apiv1.CosignHookConfig{CosignPolicy: apiv1.CosignPolicy{Signature: signatureBy(apiv1.CosignVerifier{
 			MatchOIDCIdentity: []apiv1.OIDCIdentity{{Issuer: "issuer", Subject: "subject"}},
 		})}},
 	})
@@ -233,7 +233,7 @@ func TestCosignStep_PropagatesInfrastructureError(t *testing.T) {
 	step, err := CosignBuilder(verifier)(apiv1.HookStep{
 		Name:     "signature",
 		Provider: apiv1.HookProviderCosign,
-		Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{Signature: signatureBy(apiv1.CosignVerifier{
+		Cosign: &apiv1.CosignHookConfig{CosignPolicy: apiv1.CosignPolicy{Signature: signatureBy(apiv1.CosignVerifier{
 			MatchOIDCIdentity: []apiv1.OIDCIdentity{{Issuer: "issuer", Subject: "subject"}},
 		})}},
 	})
@@ -250,7 +250,7 @@ func attestationStep(t *testing.T, verifier *fakeCosignVerifier, attestations ..
 	step, err := CosignBuilder(verifier)(apiv1.HookStep{
 		Name:     "signature",
 		Provider: apiv1.HookProviderCosign,
-		Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{
+		Cosign: &apiv1.CosignHookConfig{CosignPolicy: apiv1.CosignPolicy{
 			Signature:    signatureBy(apiv1.CosignVerifier{MatchOIDCIdentity: []apiv1.OIDCIdentity{{Issuer: "issuer", Subject: "subject"}}}),
 			Attestations: attestations,
 		}},
@@ -358,7 +358,7 @@ func TestCosignStep_VerifiesWithPublicKey(t *testing.T) {
 	step, err := CosignBuilder(verifier)(apiv1.HookStep{
 		Name:     "signature",
 		Provider: apiv1.HookProviderCosign,
-		Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{
+		Cosign: &apiv1.CosignHookConfig{CosignPolicy: apiv1.CosignPolicy{
 			Signature: apiv1.CosignSignature{CosignVerifier: apiv1.CosignVerifier{PublicKey: testPublicKeyPEM}, MinAge: minAge},
 		}},
 	})
@@ -382,9 +382,19 @@ func TestCosignStep_RejectsAnInvalidPublicKey(t *testing.T) {
 	_, err := CosignBuilder(&fakeCosignVerifier{})(apiv1.HookStep{
 		Name:     "signature",
 		Provider: apiv1.HookProviderCosign,
-		Cosign:   &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{Signature: signatureBy(apiv1.CosignVerifier{PublicKey: "not a key"})}},
+		Cosign:   &apiv1.CosignHookConfig{CosignPolicy: apiv1.CosignPolicy{Signature: signatureBy(apiv1.CosignVerifier{PublicKey: "not a key"})}},
 	})
 	g.Expect(err).To(HaveOccurred())
+}
+
+func TestCosignStep_RequiresArtifactSignatureVerifier(t *testing.T) {
+	g := NewWithT(t)
+	_, err := CosignBuilder(&fakeCosignVerifier{})(apiv1.HookStep{
+		Name:     "signature",
+		Provider: apiv1.HookProviderCosign,
+		Cosign:   &apiv1.CosignHookConfig{},
+	})
+	g.Expect(err).To(MatchError(ContainSubstring("one of matchOIDCIdentity and publicKey is required")))
 }
 
 func TestCosignStep_VerifiesAKeyBasedAttestationWithItsKey(t *testing.T) {

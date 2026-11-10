@@ -309,20 +309,17 @@ is denied.
 | OCI referrers | not supported | not supported |
 | legacy `.att` tag | supported | supported |
 
-A `cosign` step says which digests to verify and how, in two optional blocks of
-which at least one is required:
+A `cosign` step always verifies the digest the tag points at with
+`cosign.signature` and optionally requires `cosign.attestations`. This is the
+image index for a multi-arch image, or the manifest for a single-platform image
+or OCI Helm chart. `cosign.platform` optionally adds verification for explicitly
+listed platform manifests; it does not replace verification of the tag's digest.
+A platform without a variant matches any variant. A platform missing from the
+index, or a tag that is not an index when `platform` is set, is an error handled
+by `.onError`.
 
-- `cosign.index` verifies the digest the tag points at: the image index of a
-  multi-arch image, or the image itself for a single-platform tag.
-- `cosign.platform` verifies the platform manifests listed in
-  `cosign.platform.platforms` (`os/arch` or `os/arch/variant`, for example
-  `linux/amd64`, as for `wizcli`). A platform without a variant matches any
-  variant of it. A platform that is not in the image index, or a tag that is not
-  an index, is an error handled by `.onError`.
-
-Each block has its own policy, so the index and the platforms can differ. A
-policy has a required `signature` and optional `attestations`, and each of them
-names its own trust in full; nothing is inherited from the signature.
+The top-level signature policy and each platform policy are independent. Each
+attestation also names its own trust in full; nothing is inherited.
 
 - `signature` is the signature to verify, always checked first. It needs exactly
   one of:
@@ -339,9 +336,11 @@ names its own trust in full; nothing is inherited from the signature.
   their verified Rekor integrated time is old enough; too-new signatures yield
   `skipped` with reason `signature-too-new`. A signature without a verified Tlog
   timestamp fails when `minAge` is configured. It applies to the signature only.
-- `attestations` is an optional list of attestations that must be attached to the
-  digest. Each entry has a `type` and its own `matchOIDCIdentity` or `publicKey`,
-  with the rules of `signature`. The attestation signer is often not the image
+- `attestations` is an optional list of attestations that must be attached to
+  the digest. Top-level attestations apply to the tag's digest;
+  `platform.attestations` apply to each selected platform digest. Each entry has
+  a `type` and its own `matchOIDCIdentity` or `publicKey`, with the rules of
+  `signature`. The attestation signer is often not the image
   signer (for example the SLSA generator), which is why it is set per entry; when
   they are the same, write the identity once and reuse it with a YAML anchor. A
   `type` is a short alias, `spdx` (`https://spdx.dev/Document`), `slsa-provenance`
@@ -357,10 +356,11 @@ names its own trust in full; nothing is inherited from the signature.
   attestations attached to the image are neither required nor verified.
   Attestations are not discovered through the referrers API yet.
 
-The work units of a `cosign` step are one for `index` and one per platform, so
-`concurrency` and `retries` count them and the report lists each under
-`steps[].units[]` with its own verification. With only `index`, the step is one
-unit and its result has no `units`.
+The work units of a `cosign` step are one for the tag's digest and one per
+platform, so `concurrency` and `retries` count them. When platform checks are
+configured, the tag's digest is reported as the `artifact` unit, followed by
+each platform under `steps[].units[]` with its own verification. Without
+platform checks, the step is one unnamed unit and its result has no `units`.
 
 Common step controls are optional:
 
@@ -404,17 +404,16 @@ artifacts:
         - name: signature
           provider: cosign
           cosign:
-            index:
-              signature:
-                minAge: 12h
+            signature:
+              minAge: 12h
+              matchOIDCIdentity:
+                - issuer: https://token.actions.githubusercontent.com
+                  subject: ^https://github\.com/example/image/.*$
+            attestations:
+              - type: slsa-provenance
                 matchOIDCIdentity:
                   - issuer: https://token.actions.githubusercontent.com
-                    subject: ^https://github\.com/example/image/.*$
-              attestations:
-                - type: slsa-provenance
-                  matchOIDCIdentity:
-                    - issuer: https://token.actions.githubusercontent.com
-                      subject: ^https://github\.com/slsa-framework/slsa-github-generator/.*$
+                    subject: ^https://github\.com/slsa-framework/slsa-github-generator/.*$
             platform:
               platforms: [linux/amd64, linux/arm64]
               signature:
@@ -432,7 +431,7 @@ artifacts:
 ```
 
 A key-based signature, such as a chart published with `cosign sign --key`
-(a Helm chart is a single manifest, so only `index` applies):
+(a Helm chart is a single manifest, so no `platform` block is needed):
 
 ```yaml
 artifacts:
@@ -443,13 +442,12 @@ artifacts:
         - name: signature
           provider: cosign
           cosign:
-            index:
-              signature:
-                publicKey: |
-                  -----BEGIN PUBLIC KEY-----
-                  MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAENQlf6X0DsdsOYZGCbV83JVKne7Kp
-                  3XwxwGj+rHJLUPTBAbXA+vL+eZcDiFkoGbrXMsHkYR5PW7xmClX3557D5A==
-                  -----END PUBLIC KEY-----
+            signature:
+              publicKey: |
+                -----BEGIN PUBLIC KEY-----
+                MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAENQlf6X0DsdsOYZGCbV83JVKne7Kp
+                3XwxwGj+rHJLUPTBAbXA+vL+eZcDiFkoGbrXMsHkYR5PW7xmClX3557D5A==
+                -----END PUBLIC KEY-----
 ```
 
 ##### Wiz CLI scans
@@ -1060,8 +1058,8 @@ first mirrored. Referrers that exist with a different digest are skipped
 | `artifacts[].destinationType`        | `oci`      |
 | `artifacts[].verify`                 | unset      |
 | `artifacts[].hooks`                  | unset      |
-| `artifacts[].hooks.pre[].cosign.index.signature.minAge` | unset |
-| `artifacts[].hooks.pre[].cosign.index.attestations` | unset |
+| `artifacts[].hooks.pre[].cosign.signature.minAge` | unset |
+| `artifacts[].hooks.pre[].cosign.attestations` | unset |
 | `artifacts[].hooks.pre[].cosign.platform.signature.minAge` | unset |
 | `artifacts[].hooks.pre[].cosign.platform.attestations` | unset |
 | `artifacts[].hooks.pre[].timeout`    | `--timeout` |

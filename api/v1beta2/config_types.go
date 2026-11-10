@@ -622,17 +622,15 @@ type HookStep struct {
 	Wizcli *WizcliHookConfig `json:"wizcli,omitempty"`
 }
 
-// CosignHookConfig configures cosign verification for a hook. Index
-// and Platform say which digests are verified, each with its own policy, and at
-// least one is required.
+// CosignHookConfig configures cosign verification for a hook. The embedded
+// policy applies to the digest the tag points at (an image index, image
+// manifest, or other OCI artifact). Platform optionally adds verification for
+// explicitly listed platform manifests.
 type CosignHookConfig struct {
-	// Index verifies the digest the tag points at: the image index of a
-	// multi-arch image, or the image itself for a single-platform tag.
-	// +optional
-	Index *CosignPolicy `json:"index,omitempty"`
+	CosignPolicy `json:",inline"`
 
 	// Platform verifies the platform manifests listed in it, each as its own
-	// work unit.
+	// work unit, in addition to the digest covered by the embedded policy.
 	// +optional
 	Platform *CosignPlatformPolicy `json:"platform,omitempty"`
 }
@@ -677,7 +675,8 @@ type CosignAttestation struct {
 }
 
 // CosignPolicy is what must hold for one digest: a signature and, optionally,
-// attestations.
+// attestations. It is embedded in CosignHookConfig for the tag's digest and in
+// CosignPlatformPolicy for each selected platform digest.
 type CosignPolicy struct {
 	// Signature is the signature to verify. It is always checked first.
 	Signature CosignSignature `json:"signature"`

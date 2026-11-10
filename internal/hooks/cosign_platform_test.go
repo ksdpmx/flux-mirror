@@ -72,10 +72,10 @@ func unitNames(units []Unit) []string {
 	return names
 }
 
-func TestCosignStep_IndexOnlyIsOneUnnamedUnit(t *testing.T) {
+func TestCosignStep_ArtifactOnlyIsOneUnnamedUnit(t *testing.T) {
 	g := NewWithT(t)
 	verifier := platformVerifier()
-	step := platformStep(t, verifier, apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{Signature: platformSignature()}})
+	step := platformStep(t, verifier, apiv1.CosignHookConfig{CosignPolicy: apiv1.CosignPolicy{Signature: platformSignature()}})
 
 	units, err := step.Units(context.Background(), platformInput())
 
@@ -87,18 +87,18 @@ func TestCosignStep_IndexOnlyIsOneUnnamedUnit(t *testing.T) {
 	g.Expect(verifier.platformCalls).To(BeZero())
 }
 
-func TestCosignStep_IndexAndPlatformsAreSeparateUnits(t *testing.T) {
+func TestCosignStep_ArtifactAndPlatformsAreSeparateUnits(t *testing.T) {
 	g := NewWithT(t)
 	verifier := platformVerifier()
 	step := platformStep(t, verifier, apiv1.CosignHookConfig{
-		Index:    &apiv1.CosignPolicy{Signature: platformSignature()},
-		Platform: platformPolicy("linux/amd64", "linux/arm64"),
+		CosignPolicy: apiv1.CosignPolicy{Signature: platformSignature()},
+		Platform:     platformPolicy("linux/amd64", "linux/arm64"),
 	})
 
 	units, err := step.Units(context.Background(), platformInput())
 
 	g.Expect(err).ToNot(HaveOccurred())
-	g.Expect(unitNames(units)).To(Equal([]string{"index", "linux/amd64", "linux/arm64"}))
+	g.Expect(unitNames(units)).To(Equal([]string{"artifact", "linux/amd64", "linux/arm64"}))
 	for _, unit := range units {
 		outcome, err := unit.Run(context.Background())
 		g.Expect(err).ToNot(HaveOccurred())
@@ -114,24 +114,17 @@ func TestCosignStep_IndexAndPlatformsAreSeparateUnits(t *testing.T) {
 	g.Expect(verifier.platformNames).To(Equal([]string{"linux/amd64", "linux/arm64"}))
 }
 
-func TestCosignStep_PlatformOnlyHasNoIndexUnit(t *testing.T) {
-	g := NewWithT(t)
-	step := platformStep(t, platformVerifier(), apiv1.CosignHookConfig{Platform: platformPolicy("linux/arm64")})
-
-	units, err := step.Units(context.Background(), platformInput())
-
-	g.Expect(err).ToNot(HaveOccurred())
-	g.Expect(unitNames(units)).To(Equal([]string{"linux/arm64"}))
-}
-
 func TestCosignStep_MissingPlatformIsAPermanentError(t *testing.T) {
 	g := NewWithT(t)
 	verifier := platformVerifier()
-	step := platformStep(t, verifier, apiv1.CosignHookConfig{Platform: platformPolicy("linux/s390x")})
+	step := platformStep(t, verifier, apiv1.CosignHookConfig{
+		CosignPolicy: apiv1.CosignPolicy{Signature: platformSignature()},
+		Platform:     platformPolicy("linux/s390x"),
+	})
 	units, err := step.Units(context.Background(), platformInput())
 	g.Expect(err).ToNot(HaveOccurred())
 
-	_, err = units[0].Run(context.Background())
+	_, err = units[1].Run(context.Background())
 
 	g.Expect(err).To(MatchError(ContainSubstring("platform linux/s390x is not in ghcr.io/example/image@sha256:index")))
 	g.Expect(isPermanent(err)).To(BeTrue())
@@ -142,15 +135,18 @@ func TestCosignStep_ResolveFailureIsNotCachedSoARetryAsksAgain(t *testing.T) {
 	g := NewWithT(t)
 	verifier := platformVerifier()
 	verifier.platformErr = errors.New("registry unavailable")
-	step := platformStep(t, verifier, apiv1.CosignHookConfig{Platform: platformPolicy("linux/amd64")})
+	step := platformStep(t, verifier, apiv1.CosignHookConfig{
+		CosignPolicy: apiv1.CosignPolicy{Signature: platformSignature()},
+		Platform:     platformPolicy("linux/amd64"),
+	})
 	units, err := step.Units(context.Background(), platformInput())
 	g.Expect(err).ToNot(HaveOccurred())
 
-	_, err = units[0].Run(context.Background())
+	_, err = units[1].Run(context.Background())
 	g.Expect(err).To(MatchError("registry unavailable"))
 
 	verifier.platformErr = nil
-	outcome, err := units[0].Run(context.Background())
+	outcome, err := units[1].Run(context.Background())
 	g.Expect(err).ToNot(HaveOccurred())
 	g.Expect(outcome.Verdict).To(Equal(apiv1.StepVerdictAllow))
 	g.Expect(verifier.platformCalls).To(Equal(2))
@@ -162,8 +158,8 @@ func TestCosignStep_EachPolicyHasItsOwnAttestations(t *testing.T) {
 	platform := platformPolicy("linux/amd64")
 	platform.Attestations = []apiv1.CosignAttestation{platformAttestation("spdx")}
 	step := platformStep(t, verifier, apiv1.CosignHookConfig{
-		Index:    &apiv1.CosignPolicy{Signature: platformSignature(), Attestations: []apiv1.CosignAttestation{platformAttestation("slsa-provenance")}},
-		Platform: platform,
+		CosignPolicy: apiv1.CosignPolicy{Signature: platformSignature(), Attestations: []apiv1.CosignAttestation{platformAttestation("slsa-provenance")}},
+		Platform:     platform,
 	})
 	units, err := step.Units(context.Background(), platformInput())
 	g.Expect(err).ToNot(HaveOccurred())
@@ -179,14 +175,14 @@ func TestCosignStep_EachPolicyHasItsOwnAttestations(t *testing.T) {
 	}))
 }
 
-func TestCosignStep_AnIndexWithoutAttestationsDoesNotCheckThemOnPlatforms(t *testing.T) {
+func TestCosignStep_ArtifactWithoutAttestationsDoesNotCheckThemOnPlatforms(t *testing.T) {
 	g := NewWithT(t)
 	verifier := platformVerifier()
 	platform := platformPolicy("linux/amd64")
 	platform.Attestations = []apiv1.CosignAttestation{platformAttestation("spdx")}
 	step := platformStep(t, verifier, apiv1.CosignHookConfig{
-		Index:    &apiv1.CosignPolicy{Signature: platformSignature()},
-		Platform: platform,
+		CosignPolicy: apiv1.CosignPolicy{Signature: platformSignature()},
+		Platform:     platform,
 	})
 	units, err := step.Units(context.Background(), platformInput())
 	g.Expect(err).ToNot(HaveOccurred())
@@ -207,8 +203,8 @@ func TestCosignStep_RunnerReportsEveryUnitAndADeniedPlatformDeniesTheTag(t *test
 		Name:     "signature",
 		Provider: apiv1.HookProviderCosign,
 		Cosign: &apiv1.CosignHookConfig{
-			Index:    &apiv1.CosignPolicy{Signature: platformSignature()},
-			Platform: platformPolicy("linux/amd64", "linux/arm64"),
+			CosignPolicy: apiv1.CosignPolicy{Signature: platformSignature()},
+			Platform:     platformPolicy("linux/amd64", "linux/arm64"),
 		},
 	}}}
 	builders := map[string]Builder{apiv1.HookProviderCosign: CosignBuilder(verifier)}
@@ -223,7 +219,7 @@ func TestCosignStep_RunnerReportsEveryUnitAndADeniedPlatformDeniesTheTag(t *test
 	g.Expect(step.Verdict).To(Equal(apiv1.StepVerdictDeny))
 	g.Expect(step.Reason).To(Equal("linux/arm64: no matching signature"))
 	g.Expect(step.Units).To(HaveLen(3))
-	g.Expect(step.Units[0].Name).To(Equal("index"))
+	g.Expect(step.Units[0].Name).To(Equal("artifact"))
 	g.Expect(step.Units[0].Cosign).ToNot(BeNil())
 	g.Expect(step.Units[1].Verdict).To(Equal(apiv1.StepVerdictAllow))
 	g.Expect(step.Units[1].Cosign.Identity).To(Equal("subject"))

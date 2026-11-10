@@ -44,102 +44,54 @@
                       "additionalProperties": false,
                       "description": "Cosign configures cosign verification for this step.",
                       "properties": {
-                        "index": {
-                          "additionalProperties": false,
-                          "description": "Index verifies the digest the tag points at: the image index of a\nmulti-arch image, or the image itself for a single-platform tag.",
-                          "properties": {
-                            "attestations": {
-                              "description": "Attestations lists the attestations that must be attached to the digest,\neach with its own verifier. They are read from the cosign tag-based .att\ntag of the verified digest.",
-                              "items": {
-                                "additionalProperties": false,
-                                "description": "CosignAttestation is an attestation of one predicate type that must be\nattached to a digest. It names its own verifier, which is not inherited from\nthe signature, because attestations are often signed by another identity\n(for example the SLSA generator).",
-                                "properties": {
-                                  "matchOIDCIdentity": {
-                                    "description": "MatchOIDCIdentity lists the Fulcio certificate identities to accept\n(keyless). It cannot be combined with PublicKey.",
-                                    "items": {
-                                      "additionalProperties": false,
-                                      "description": "OIDCIdentity matches a Fulcio certificate identity.",
-                                      "properties": {
-                                        "issuer": {
-                                          "description": "Issuer is the OIDC issuer URL of the signing identity.",
-                                          "type": "string"
-                                        },
-                                        "subject": {
-                                          "description": "Subject is a regexp matched against the certificate subject.",
-                                          "type": "string"
-                                        }
-                                      },
-                                      "required": [
-                                        "issuer",
-                                        "subject"
-                                      ],
-                                      "type": "object"
+                        "attestations": {
+                          "description": "Attestations lists the attestations that must be attached to the digest,\neach with its own verifier. They are read from the cosign tag-based .att\ntag of the verified digest.",
+                          "items": {
+                            "additionalProperties": false,
+                            "description": "CosignAttestation is an attestation of one predicate type that must be\nattached to a digest. It names its own verifier, which is not inherited from\nthe signature, because attestations are often signed by another identity\n(for example the SLSA generator).",
+                            "properties": {
+                              "matchOIDCIdentity": {
+                                "description": "MatchOIDCIdentity lists the Fulcio certificate identities to accept\n(keyless). It cannot be combined with PublicKey.",
+                                "items": {
+                                  "additionalProperties": false,
+                                  "description": "OIDCIdentity matches a Fulcio certificate identity.",
+                                  "properties": {
+                                    "issuer": {
+                                      "description": "Issuer is the OIDC issuer URL of the signing identity.",
+                                      "type": "string"
                                     },
-                                    "type": "array"
+                                    "subject": {
+                                      "description": "Subject is a regexp matched against the certificate subject.",
+                                      "type": "string"
+                                    }
                                   },
-                                  "publicKey": {
-                                    "description": "PublicKey is a PEM-encoded public key (ECDSA, RSA or Ed25519) that must\nhave made the signature (key-based, as with cosign sign --key). The\nsignature must also be in a transparency log. It cannot be combined with\nMatchOIDCIdentity.",
-                                    "type": "string"
-                                  },
-                                  "type": {
-                                    "description": "Type is the predicate type, as a short alias (spdx, slsa-provenance,\ncyclonedx) or a full predicate type URI.",
-                                    "type": "string"
-                                  }
+                                  "required": [
+                                    "issuer",
+                                    "subject"
+                                  ],
+                                  "type": "object"
                                 },
-                                "required": [
-                                  "type"
-                                ],
-                                "type": "object"
+                                "type": "array"
                               },
-                              "type": "array"
+                              "publicKey": {
+                                "description": "PublicKey is a PEM-encoded public key (ECDSA, RSA or Ed25519) that must\nhave made the signature (key-based, as with cosign sign --key). The\nsignature must also be in a transparency log. It cannot be combined with\nMatchOIDCIdentity.",
+                                "type": "string"
+                              },
+                              "type": {
+                                "description": "Type is the predicate type, as a short alias (spdx, slsa-provenance,\ncyclonedx) or a full predicate type URI.",
+                                "type": "string"
+                              }
                             },
-                            "signature": {
-                              "additionalProperties": false,
-                              "description": "Signature is the signature to verify. It is always checked first.",
-                              "properties": {
-                                "matchOIDCIdentity": {
-                                  "description": "MatchOIDCIdentity lists the Fulcio certificate identities to accept\n(keyless). It cannot be combined with PublicKey.",
-                                  "items": {
-                                    "additionalProperties": false,
-                                    "description": "OIDCIdentity matches a Fulcio certificate identity.",
-                                    "properties": {
-                                      "issuer": {
-                                        "description": "Issuer is the OIDC issuer URL of the signing identity.",
-                                        "type": "string"
-                                      },
-                                      "subject": {
-                                        "description": "Subject is a regexp matched against the certificate subject.",
-                                        "type": "string"
-                                      }
-                                    },
-                                    "required": [
-                                      "issuer",
-                                      "subject"
-                                    ],
-                                    "type": "object"
-                                  },
-                                  "type": "array"
-                                },
-                                "minAge": {
-                                  "description": "MinAge requires the signature to be at least this old before mirroring.\nIt applies to the signature only, not to attestations.",
-                                  "type": "string"
-                                },
-                                "publicKey": {
-                                  "description": "PublicKey is a PEM-encoded public key (ECDSA, RSA or Ed25519) that must\nhave made the signature (key-based, as with cosign sign --key). The\nsignature must also be in a transparency log. It cannot be combined with\nMatchOIDCIdentity.",
-                                  "type": "string"
-                                }
-                              },
-                              "type": "object"
-                            }
+                            "required": [
+                              "type"
+                            ],
+                            "type": "object"
                           },
-                          "required": [
-                            "signature"
-                          ],
-                          "type": "object"
+                          "type": "array"
                         },
                         "platform": {
                           "additionalProperties": false,
-                          "description": "Platform verifies the platform manifests listed in it, each as its own\nwork unit.",
+                          "description": "Platform verifies the platform manifests listed in it, each as its own\nwork unit, in addition to the digest covered by the embedded policy.",
                           "properties": {
                             "attestations": {
                               "description": "Attestations lists the attestations that must be attached to the digest,\neach with its own verifier. They are read from the cosign tag-based .att\ntag of the verified digest.",
@@ -238,8 +190,49 @@
                             "signature"
                           ],
                           "type": "object"
+                        },
+                        "signature": {
+                          "additionalProperties": false,
+                          "description": "Signature is the signature to verify. It is always checked first.",
+                          "properties": {
+                            "matchOIDCIdentity": {
+                              "description": "MatchOIDCIdentity lists the Fulcio certificate identities to accept\n(keyless). It cannot be combined with PublicKey.",
+                              "items": {
+                                "additionalProperties": false,
+                                "description": "OIDCIdentity matches a Fulcio certificate identity.",
+                                "properties": {
+                                  "issuer": {
+                                    "description": "Issuer is the OIDC issuer URL of the signing identity.",
+                                    "type": "string"
+                                  },
+                                  "subject": {
+                                    "description": "Subject is a regexp matched against the certificate subject.",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "issuer",
+                                  "subject"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "minAge": {
+                              "description": "MinAge requires the signature to be at least this old before mirroring.\nIt applies to the signature only, not to attestations.",
+                              "type": "string"
+                            },
+                            "publicKey": {
+                              "description": "PublicKey is a PEM-encoded public key (ECDSA, RSA or Ed25519) that must\nhave made the signature (key-based, as with cosign sign --key). The\nsignature must also be in a transparency log. It cannot be combined with\nMatchOIDCIdentity.",
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
                         }
                       },
+                      "required": [
+                        "signature"
+                      ],
                       "type": "object"
                     },
                     "name": {

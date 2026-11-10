@@ -178,7 +178,7 @@ per-platform unit. Blocked tags print the step and failed policies in the text
 output. The `sk8s-flux-mirror` chart (S8) and the initContainer that delivers the
 `wizcli` binary (S17) are done and ran in a Kubernetes CronJob. The `cosign`
 step also verifies attestations (S18) and has per-platform work units
-(`cosign.index` / `cosign.platform`). Not done:
+(`cosign` artifact digest plus optional `cosign.platform`). Not done:
 `hooks` for `charts` entries, the `AUDIT`-only verdict check (S1), whether
 `scan dir` renders chart templates (S3), `hooks.post` (S13), and a `wiz-api`
 provider (S7). Implemented as decided
@@ -787,28 +787,28 @@ scans a directory; both accept `--policies`, `--projects`, `--timeout`,
     no separate attestation identity was needed, and requiring a type that is not
     attached blocks the tag. Tests use sigstore-go's virtual sigstore, which adds
     indirect test dependencies to `go.mod`.
-  - **Implemented: `cosign.index` and `cosign.platform`.** The top-level
-    `cosign.matchOIDCIdentity`/`minAge`/`attestations` were replaced by two
-    optional blocks (at least one required), each with its own
-    `matchOIDCIdentity`, `minAge` and `attestations`; `platform` also has
-    `platforms` (`os/arch[/variant]`, listed explicitly like `wizcli`). A step
-    has one work unit named `index` and one per platform, so `concurrency` and
-    `retries` count them, each digest is verified on its own (signature, then its
-    `.att`), and the report lists each unit's `cosign` result. Only `index` keeps
-    the old shape: one unnamed unit. The platform digests are read from the image
-    index once per tag (`Verifier.ResolvePlatforms`, a failure is not cached so a
-    retry asks again); a platform that is not in the index, or a tag that is not
-    an index, is a permanent error handled by `onError`, as for `wizcli`. Checked
-    on the real images: for `cgr.dev/lexisnexislegal.com/amazon-k8s-cni-init` the
-    index and both platforms have a `.sig` and the same four `.att` types.
+  - **Implemented: top-level artifact policy and optional `cosign.platform`.**
+    `cosign.signature` and `cosign.attestations` verify the digest the tag points
+    at (an image index, a single manifest, or another OCI artifact). `platform`
+    optionally adds a complete, independent policy for each explicitly listed
+    `platforms` (`os/arch[/variant]`). A step without platform checks is one
+    unnamed work unit; with platform checks it has a named `artifact` unit plus
+    one per platform, so `concurrency` and `retries` count each digest. The
+    platform digests are read from the image index once per tag
+    (`Verifier.ResolvePlatforms`, a failure is not cached so a retry asks again);
+    a missing platform or a non-index tag with `platform` is a permanent error
+    handled by `onError`, as for `wizcli`. Checked on the real images: for
+    `cgr.dev/lexisnexislegal.com/amazon-k8s-cni-init` the index and both platforms
+    have a `.sig` and the same four `.att` types.
   - **Implemented: key-based signatures, and a separate trust for `signature` and
-    each attestation.** The config is now `cosign.index|platform.signature`
-    (`matchOIDCIdentity` or `publicKey`, plus `minAge`) and
-    `attestations: [{type, matchOIDCIdentity | publicKey}]`; an attestation names
-    its own trust and nothing is inherited (flux-cli's SLSA attestation is signed
-    by the SLSA generator, not by the image signer). `publicKey` is an inline PEM,
-    never taken from the bundle, and needs a transparency log entry. A legacy
-    `.sig` or `.att` layer without a certificate is a key-based bundle. Checked on
+    each attestation.** The config uses top-level `cosign.signature` and
+    `cosign.attestations`, plus an optional `cosign.platform` policy; each
+    signature has `matchOIDCIdentity` or `publicKey`, plus `minAge`. Each
+    attestation has `type` and its own `matchOIDCIdentity` or `publicKey`; nothing
+    is inherited (flux-cli's SLSA attestation is signed by the SLSA generator, not
+    by the image signer). `publicKey` is an inline PEM, never taken from the
+    bundle, and needs a transparency log entry. A legacy `.sig` or `.att` layer
+    without a certificate is a key-based bundle. Checked on
     `public-registry.wiz.io/charts/wiz-sensor` (legacy `.sig` and key), on a local
     image signed with `cosign sign --key` (referrers and key), on a local key
     attestation, and on `ghcr.io/fluxcd/flux-cli` (referrers signature plus legacy

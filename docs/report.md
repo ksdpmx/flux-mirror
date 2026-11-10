@@ -162,7 +162,9 @@ Errors with `onError: block` produce a failed tag, while `onError: warn`
 records the error and lets mirroring continue; a denial with `onDeny: warn` is
 recorded the same way and the tag is copied. A too-new cosign signature is a
 `skip` verdict with reason `signature-too-new`; `cosign.age` and
-`cosign.minAge` record the measured and required ages.
+`cosign.minAge` record the measured and required ages. For hook verification,
+`cosign.minAge` comes from `cosign.signature.minAge` or
+`cosign.platform.signature.minAge`.
 
 | Key        | Description                                                        |
 |------------|--------------------------------------------------------------------|
@@ -177,15 +179,15 @@ recorded the same way and the tag is copied. A too-new cosign signature is a
 | `units[]`  | Per-unit results, present only when the step has named units.      |
 
 A step whose work splits into named units, such as `wizcli` with one unit per
-platform or `cosign` with an `index` and a `platform` policy (units `index` and
-one per platform), adds `units[]`. The step `verdict`, `reason`, and `error` are the
+platform or `cosign` with a `platform` policy (units `artifact` and one per
+platform), adds `units[]`. The step `verdict`, `reason`, and `error` are the
 aggregate of its units: a denied unit denies the step (its `reason` lists each
 denied unit as `<unit>: <reason>`), otherwise an errored unit makes the step an
 error, otherwise a skipped unit skips it. Each unit row has:
 
 | Key        | Description                                                          |
 |------------|----------------------------------------------------------------------|
-| `name`     | Unit name, the platform such as `linux/amd64`.                       |
+| `name`     | Unit name: `artifact` for the tag's digest, or a platform such as `linux/amd64`. |
 | `verdict`  | `allow`, `deny`, `skip`, or `error`.                                  |
 | `reason`   | Explanation for a deny or skip.                                      |
 | `error`    | Infrastructure error after the unit's retries.                       |

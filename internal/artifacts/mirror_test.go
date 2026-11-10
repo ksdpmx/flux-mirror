@@ -121,7 +121,7 @@ func testHookEntry(src, dst string) apiv1.ArtifactEntry {
 		Hooks: &apiv1.ArtifactHooks{Pre: []apiv1.HookStep{{
 			Name:     "signature",
 			Provider: apiv1.HookProviderCosign,
-			Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{Signature: apiv1.CosignSignature{CosignVerifier: apiv1.CosignVerifier{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
+			Cosign: &apiv1.CosignHookConfig{CosignPolicy: apiv1.CosignPolicy{Signature: apiv1.CosignSignature{CosignVerifier: apiv1.CosignVerifier{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
 				Issuer: "issuer", Subject: "subject",
 			}}}}}},
 		}}},

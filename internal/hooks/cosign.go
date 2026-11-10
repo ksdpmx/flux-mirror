@@ -28,8 +28,8 @@ type cosignVerifier interface {
 }
 
 // CosignBuilder creates the cosign signature verification provider. A step
-// verifies the digest the tag points at (index), the platform manifests listed
-// in platform, or both; each is a work unit with its own policy.
+// always verifies the digest the tag points at, and optionally verifies the
+// platform manifests listed in platform; each digest has its own policy.
 func CosignBuilder(verifier cosignVerifier) Builder {
 	return func(config apiv1.HookStep) (Step, error) {
 		if verifier == nil {
@@ -38,14 +38,11 @@ func CosignBuilder(verifier cosignVerifier) Builder {
 		if config.Cosign == nil {
 			return nil, fmt.Errorf("cosign configuration is required")
 		}
-		step := cosignStep{verifier: verifier}
-		if config.Cosign.Index != nil {
-			policy, err := newCosignPolicy(*config.Cosign.Index)
-			if err != nil {
-				return nil, err
-			}
-			step.index = &policy
+		policy, err := newCosignPolicy(config.Cosign.CosignPolicy)
+		if err != nil {
+			return nil, err
 		}
+		step := cosignStep{verifier: verifier, artifact: policy}
 		if config.Cosign.Platform != nil {
 			policy, err := newCosignPolicy(config.Cosign.Platform.CosignPolicy)
 			if err != nil {
@@ -53,9 +50,6 @@ func CosignBuilder(verifier cosignVerifier) Builder {
 			}
 			step.platform = &policy
 			step.platforms = config.Cosign.Platform.Platforms
-		}
-		if step.index == nil && step.platform == nil {
-			return nil, fmt.Errorf("cosign configuration needs index, platform or both")
 		}
 		return step, nil
 	}
@@ -71,6 +65,12 @@ type cosignTrust struct {
 }
 
 func newCosignTrust(v apiv1.CosignVerifier) (cosignTrust, error) {
+	switch {
+	case v.PublicKey != "" && len(v.MatchOIDCIdentity) > 0:
+		return cosignTrust{}, fmt.Errorf("publicKey and matchOIDCIdentity are mutually exclusive")
+	case v.PublicKey == "" && len(v.MatchOIDCIdentity) == 0:
+		return cosignTrust{}, fmt.Errorf("one of matchOIDCIdentity and publicKey is required")
+	}
 	trust := cosignTrust{identities: v.MatchOIDCIdentity, publicKey: v.PublicKey}
 	if v.PublicKey != "" {
 		key, err := oci.ParsePublicKeyPEM(v.PublicKey)
@@ -119,30 +119,26 @@ func newCosignPolicy(p apiv1.CosignPolicy) (cosignPolicy, error) {
 
 type cosignStep struct {
 	verifier  cosignVerifier
-	index     *cosignPolicy
+	artifact  cosignPolicy
 	platform  *cosignPolicy
 	platforms []string
 }
 
-// Units implements Step. A step with only an index policy is one unnamed unit,
-// so its result keeps the shape it had before platforms existed. With a
-// platform policy there is a unit named index (when configured) and one per
-// platform, so each digest is reported and retried on its own.
+// Units implements Step. Without platform verification, the artifact digest
+// is one unnamed unit. With platform verification, the artifact digest is a
+// named unit followed by one unit per selected platform.
 func (s cosignStep) Units(_ context.Context, input Input) ([]Unit, error) {
-	indexRef := input.Source + "@" + input.Digest
+	artifactRef := input.Source + "@" + input.Digest
 	if s.platform == nil {
 		return []Unit{{Run: func(ctx context.Context) (Outcome, error) {
-			return s.verify(ctx, indexRef, input.Digest, *s.index)
+			return s.verify(ctx, artifactRef, input.Digest, s.artifact)
 		}}}, nil
 	}
 
-	var units []Unit
-	if s.index != nil {
-		units = append(units, Unit{Name: "index", Run: func(ctx context.Context) (Outcome, error) {
-			return s.verify(ctx, indexRef, input.Digest, *s.index)
-		}})
-	}
-	resolver := &platformResolver{verifier: s.verifier, ref: indexRef, platforms: s.platforms}
+	units := []Unit{{Name: "artifact", Run: func(ctx context.Context) (Outcome, error) {
+		return s.verify(ctx, artifactRef, input.Digest, s.artifact)
+	}}}
+	resolver := &platformResolver{verifier: s.verifier, ref: artifactRef, platforms: s.platforms}
 	for _, platform := range s.platforms {
 		units = append(units, Unit{Name: platform, Run: func(ctx context.Context) (Outcome, error) {
 			digest, err := resolver.digest(ctx, platform)

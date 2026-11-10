@@ -652,16 +652,11 @@ func validateHookProvider(step apiv1.HookStep) error {
 
 var hookPlatformPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?$`)
 
-// validateCosignHook requires at least one of index and platform, and checks
-// the policy of each.
+// validateCosignHook checks the required policy for the digest the tag points
+// at, and the optional policy for each selected platform.
 func validateCosignHook(c apiv1.CosignHookConfig) error {
-	if c.Index == nil && c.Platform == nil {
-		return fmt.Errorf("at least one of index and platform is required")
-	}
-	if c.Index != nil {
-		if err := validateCosignPolicy(*c.Index); err != nil {
-			return fmt.Errorf("index: %w", err)
-		}
+	if err := validateCosignPolicy(c.CosignPolicy); err != nil {
+		return fmt.Errorf("cosign: %w", err)
 	}
 	if c.Platform != nil {
 		if err := validateCosignPolicy(c.Platform.CosignPolicy); err != nil {
