@@ -150,7 +150,7 @@
                           },
                           "cosign": {
                             "additionalProperties": false,
-                            "description": "Verification is the signature verification metadata recorded on a tag row.\nOnly Provider is guaranteed; everything else is best-effort and omitted when\nempty: Issuer/Identity are set when the keyless cert identity is recovered;\nIntegratedTime only when the bundle carries a verified transparency-log\ntimestamp; Age/MinAge only on the signature-too-new skip.",
+                            "description": "Verification is the signature verification metadata recorded on a tag row.\nOnly Provider is guaranteed; everything else is best-effort and omitted when\nempty: Issuer/Identity are set when the keyless cert identity is recovered,\nKey for a key-based signature;\nIntegratedTime only when the bundle carries a verified transparency-log\ntimestamp; Age/MinAge only on the signature-too-new skip.",
                             "properties": {
                               "age": {
                                 "description": "Age is the signature age on the signature-too-new skip.",
@@ -173,6 +173,10 @@
                               },
                               "issuer": {
                                 "description": "Issuer is the recovered keyless certificate issuer.",
+                                "type": "string"
+                              },
+                              "key": {
+                                "description": "Key is the SHA-256 fingerprint of the public key that made a key-based\nsignature, as sha256:\u003chex\u003e over the DER-encoded key.",
                                 "type": "string"
                               },
                               "minAge": {
@@ -245,6 +249,10 @@
                                     },
                                     "issuer": {
                                       "description": "Issuer is the recovered keyless certificate issuer.",
+                                      "type": "string"
+                                    },
+                                    "key": {
+                                      "description": "Key is the SHA-256 fingerprint of the public key that made a key-based\nsignature, as sha256:\u003chex\u003e over the DER-encoded key.",
                                       "type": "string"
                                     },
                                     "minAge": {
@@ -375,6 +383,10 @@
                         },
                         "issuer": {
                           "description": "Issuer is the recovered keyless certificate issuer.",
+                          "type": "string"
+                        },
+                        "key": {
+                          "description": "Key is the SHA-256 fingerprint of the public key that made a key-based\nsignature, as sha256:\u003chex\u003e over the DER-encoded key.",
                           "type": "string"
                         },
                         "minAge": {

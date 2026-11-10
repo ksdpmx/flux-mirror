@@ -277,7 +277,7 @@ artifacts:
 
 `.artifacts[].hooks.pre` is an optional ordered list of checks that run after
 the source/destination comparison and before copying a tag. Two providers are
-available: `cosign`, which verifies keyless signatures discovered through the
+available: `cosign`, which verifies keyless or key-based signatures discovered through the
 OCI 1.1 referrers API, falling back to cosign's legacy `sha256-<digest>.sig` tag
 discovery when no referrer bundle is present, and `wizcli`, which scans the
 image with the Wiz CLI (see [Wiz CLI scans](#wiz-cli-scans)). Steps run in
@@ -289,6 +289,21 @@ Each step has a unique lowercase `.name`, a `.provider`, and exactly the
 configuration block named after that provider; a missing or misplaced block is
 rejected. An entry cannot combine `verify:` and `hooks.pre`, because that would
 verify each tag twice.
+
+A `cosign` step has two independent parts. Discovery finds where the signature
+is stored, and verification decides what to trust. Discovery tries the OCI 1.1
+referrers API first and falls back to cosign's legacy `sha256-<digest>.sig` tag,
+so both storage layouts work with either kind of policy. The policy picks the
+verification: `matchOIDCIdentity` is keyless (a Fulcio certificate identity) and
+`publicKey` is key-based. A signature of the other kind is denied.
+
+| Signature stored in | Keyless (`matchOIDCIdentity`) | Key-based (`publicKey`) |
+|---|---|---|
+| OCI referrers | supported | supported |
+| legacy `.sig` tag | supported | supported |
+
+Attestations are narrower: they are read only from the `.att` tag and verified
+only keyless. See `attestations` below.
 
 A `cosign` step says which digests to verify and how, in two optional blocks of
 which at least one is required:
@@ -303,14 +318,23 @@ which at least one is required:
 
 Each block has its own policy, so the index and the platforms can differ:
 
-- `matchOIDCIdentity` is required and uses the same issuer and subject-regexp
-  rules as [`verify`](#signature-verification).
+- `matchOIDCIdentity` (keyless) or `publicKey` (key-based) is required, and they
+  are mutually exclusive. `matchOIDCIdentity` uses the same issuer and
+  subject-regexp rules as [`verify`](#signature-verification).
+- `publicKey` is an inline PEM public key (ECDSA, RSA or Ed25519) that must have
+  made the signature, for artifacts signed with `cosign sign --key`. The
+  signature must also be in a transparency log (the Rekor bundle cosign stores
+  with it). The key is never taken from the signature, so obtain it from the
+  publisher, not from the registry. A keyless policy rejects a key-based
+  signature and the other way round. `attestations` is not supported with
+  `publicKey`. The report carries the key's SHA-256 fingerprint as `key`, and no
+  `issuer` or `identity`.
 - `minAge` is an optional duration that defers valid signatures until their
   verified Rekor integrated time is old enough; too-new signatures yield
   `skipped` with reason `signature-too-new`. A signature without a verified Tlog
   timestamp fails when `minAge` is configured.
 - `attestations` is an optional list of attestations that must be attached to the
-  digest, each signed by one of that block's `matchOIDCIdentity`. An entry is a
+  digest, each signed by one of that block's `matchOIDCIdentity` (keyless only). An entry is a
   short alias, `spdx` (`https://spdx.dev/Document`), `slsa-provenance`
   (`https://slsa.dev/provenance/v1`) or `cyclonedx` (`https://cyclonedx.org/bom`),
   or a full predicate type URI such as `https://apko.dev/image-configuration`;
@@ -392,6 +416,26 @@ artifacts:
           wizcli:
             platforms: [linux/amd64, linux/arm64]
             policies: [prod-vuln]
+```
+
+A key-based signature, such as a chart published with `cosign sign --key`
+(a Helm chart is a single manifest, so only `index` applies):
+
+```yaml
+artifacts:
+  - source: public-registry.wiz.io/charts/wiz-sensor
+    destination: quay.io/mirror/charts/wiz-sensor
+    hooks:
+      pre:
+        - name: signature
+          provider: cosign
+          cosign:
+            index:
+              publicKey: |
+                -----BEGIN PUBLIC KEY-----
+                MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAENQlf6X0DsdsOYZGCbV83JVKne7Kp
+                3XwxwGj+rHJLUPTBAbXA+vL+eZcDiFkoGbrXMsHkYR5PW7xmClX3557D5A==
+                -----END PUBLIC KEY-----
 ```
 
 ##### Wiz CLI scans

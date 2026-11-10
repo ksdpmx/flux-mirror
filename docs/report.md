@@ -142,6 +142,7 @@ verification. Only `provider` is guaranteed; the rest is best-effort.
 | `provider`       | Verification provider, e.g. `cosign`.                                                                |
 | `issuer`         | Matched OIDC issuer from the signing certificate.                                                    |
 | `identity`       | Matched certificate identity (subject alternative name).                                             |
+| `key`            | SHA-256 fingerprint (`sha256:<hex>`) of the public key of a key-based signature. Present only with a `publicKey` policy. |
 | `integratedTime` | Transparency-log integration time (RFC 3339). Present only when the bundle carries a Tlog timestamp. |
 | `age`            | Signature age, as a Go duration string. Present only on a `signature-too-new` skip.                  |
 | `minAge`         | Configured `verify.minAge` or the `minAge` of the `hooks.pre[].cosign` policy. Present only on a `signature-too-new` skip. |

@@ -168,6 +168,7 @@ func TestFindCosignTagBundle(t *testing.T) {
 		setup     func(t testing.TB, repoAddr string, digest v1.Hash) []byte // returns the pushed payload, nil if not applicable
 		wantErr   string
 		wantErrIs error
+		wantKey   bool
 	}{
 		{
 			name:     "signature found and parsed",
@@ -197,15 +198,14 @@ func TestFindCosignTagBundle(t *testing.T) {
 			wantErr: "does not match",
 		},
 		{
-			name:     "missing certificate annotation",
+			name:     "missing certificate annotation is a key-based signature",
 			repoStem: "cosign-tag-nocert",
 			setup: func(t testing.TB, repoAddr string, digest v1.Hash) []byte {
-				pushCosignTagSignature(t, repoAddr, digest, func(a map[string]string) {
+				return pushCosignTagSignature(t, repoAddr, digest, func(a map[string]string) {
 					delete(a, cosignTagAnnotationCertificate)
 				})
-				return nil
 			},
-			wantErr: "key-based signatures are not supported",
+			wantKey: true,
 		},
 		{
 			name:     "missing rekor bundle annotation",
@@ -254,7 +254,12 @@ func TestFindCosignTagBundle(t *testing.T) {
 			g.Expect(msg.Signature).ToNot(BeEmpty())
 
 			vm := b.VerificationMaterial
-			g.Expect(vm.GetX509CertificateChain().Certificates).To(HaveLen(1))
+			if tt.wantKey {
+				g.Expect(vm.GetPublicKey()).ToNot(BeNil())
+				g.Expect(vm.GetX509CertificateChain()).To(BeNil())
+			} else {
+				g.Expect(vm.GetX509CertificateChain().Certificates).To(HaveLen(1))
+			}
 			g.Expect(vm.TlogEntries).To(HaveLen(1))
 			entry := vm.TlogEntries[0]
 			g.Expect(entry.KindVersion.Kind).To(Equal(hashedrekord.KIND))

@@ -314,7 +314,8 @@ type ReferrerResult struct {
 
 // Verification is the signature verification metadata recorded on a tag row.
 // Only Provider is guaranteed; everything else is best-effort and omitted when
-// empty: Issuer/Identity are set when the keyless cert identity is recovered;
+// empty: Issuer/Identity are set when the keyless cert identity is recovered,
+// Key for a key-based signature;
 // IntegratedTime only when the bundle carries a verified transparency-log
 // timestamp; Age/MinAge only on the signature-too-new skip.
 type Verification struct {
@@ -328,6 +329,11 @@ type Verification struct {
 	// Identity is the recovered keyless certificate identity.
 	// +optional
 	Identity string `json:"identity,omitempty"`
+
+	// Key is the SHA-256 fingerprint of the public key that made a key-based
+	// signature, as sha256:<hex> over the DER-encoded key.
+	// +optional
+	Key string `json:"key,omitempty"`
 
 	// IntegratedTime is the verified transparency-log timestamp.
 	// +optional

@@ -42,21 +42,21 @@
                     },
                     "cosign": {
                       "additionalProperties": false,
-                      "description": "Cosign configures keyless cosign verification for this step.",
+                      "description": "Cosign configures cosign verification for this step.",
                       "properties": {
                         "index": {
                           "additionalProperties": false,
                           "description": "Index verifies the digest the tag points at: the image index of a\nmulti-arch image, or the image itself for a single-platform tag.",
                           "properties": {
                             "attestations": {
-                              "description": "Attestations lists the attestations that must be attached to the digest\nand signed by one of MatchOIDCIdentity, each as a short alias (spdx,\nslsa-provenance, cyclonedx) or a full predicate type URI. They are read\nfrom the cosign tag-based .att tag of the verified digest.",
+                              "description": "Attestations lists the attestations that must be attached to the digest\nand signed by one of MatchOIDCIdentity (not supported with PublicKey), each as a short alias (spdx,\nslsa-provenance, cyclonedx) or a full predicate type URI. They are read\nfrom the cosign tag-based .att tag of the verified digest.",
                               "items": {
                                 "type": "string"
                               },
                               "type": "array"
                             },
                             "matchOIDCIdentity": {
-                              "description": "MatchOIDCIdentity lists the Fulcio certificate identities to accept.",
+                              "description": "MatchOIDCIdentity lists the Fulcio certificate identities to accept\n(keyless). It cannot be combined with PublicKey.",
                               "items": {
                                 "additionalProperties": false,
                                 "description": "OIDCIdentity matches a Fulcio certificate identity.",
@@ -81,11 +81,12 @@
                             "minAge": {
                               "description": "MinAge requires a signature to be at least this old before mirroring.",
                               "type": "string"
+                            },
+                            "publicKey": {
+                              "description": "PublicKey is a PEM-encoded public key (ECDSA, RSA or Ed25519) that must\nhave made the signature (key-based, as with cosign sign --key). The\nsignature must also be in a transparency log. It cannot be combined with\nMatchOIDCIdentity or Attestations.",
+                              "type": "string"
                             }
                           },
-                          "required": [
-                            "matchOIDCIdentity"
-                          ],
                           "type": "object"
                         },
                         "platform": {
@@ -93,14 +94,14 @@
                           "description": "Platform verifies the platform manifests listed in it, each as its own\nwork unit.",
                           "properties": {
                             "attestations": {
-                              "description": "Attestations lists the attestations that must be attached to the digest\nand signed by one of MatchOIDCIdentity, each as a short alias (spdx,\nslsa-provenance, cyclonedx) or a full predicate type URI. They are read\nfrom the cosign tag-based .att tag of the verified digest.",
+                              "description": "Attestations lists the attestations that must be attached to the digest\nand signed by one of MatchOIDCIdentity (not supported with PublicKey), each as a short alias (spdx,\nslsa-provenance, cyclonedx) or a full predicate type URI. They are read\nfrom the cosign tag-based .att tag of the verified digest.",
                               "items": {
                                 "type": "string"
                               },
                               "type": "array"
                             },
                             "matchOIDCIdentity": {
-                              "description": "MatchOIDCIdentity lists the Fulcio certificate identities to accept.",
+                              "description": "MatchOIDCIdentity lists the Fulcio certificate identities to accept\n(keyless). It cannot be combined with PublicKey.",
                               "items": {
                                 "additionalProperties": false,
                                 "description": "OIDCIdentity matches a Fulcio certificate identity.",
@@ -133,10 +134,13 @@
                               },
                               "minItems": 1,
                               "type": "array"
+                            },
+                            "publicKey": {
+                              "description": "PublicKey is a PEM-encoded public key (ECDSA, RSA or Ed25519) that must\nhave made the signature (key-based, as with cosign sign --key). The\nsignature must also be in a transparency log. It cannot be combined with\nMatchOIDCIdentity or Attestations.",
+                              "type": "string"
                             }
                           },
                           "required": [
-                            "matchOIDCIdentity",
                             "platforms"
                           ],
                           "type": "object"

@@ -38,6 +38,11 @@ type fakeCosignVerifier struct {
 	attestationOut   []string
 	attestationErr   error
 
+	keyCalls  int
+	keyRef    string
+	keyPEM    string
+	keyMinAge *metav1.Duration
+
 	platformCalls  int
 	platformRef    string
 	platformNames  []string
@@ -88,6 +93,20 @@ func (v *fakeCosignVerifier) VerifyWithDiscovery(
 	if err, ok := v.errByRef[ref]; ok {
 		return nil, err
 	}
+	return v.info, v.err
+}
+
+func (v *fakeCosignVerifier) VerifyWithKey(
+	_ context.Context,
+	ref string,
+	publicKeyPEM string,
+	minAge *metav1.Duration,
+	_ oci.SignatureDiscoverer,
+) (*oci.VerificationInfo, error) {
+	v.keyCalls++
+	v.keyRef = ref
+	v.keyPEM = publicKeyPEM
+	v.keyMinAge = minAge
 	return v.info, v.err
 }
 
@@ -305,4 +324,50 @@ func TestCosignStep_RejectedSignatureSkipsTheAttestationCheck(t *testing.T) {
 	g.Expect(err).ToNot(HaveOccurred())
 	g.Expect(outcome.Verdict).To(Equal(apiv1.StepVerdictDeny))
 	g.Expect(verifier.attestationCalls).To(BeZero())
+}
+
+const testPublicKeyPEM = `-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAENQlf6X0DsdsOYZGCbV83JVKne7Kp
+3XwxwGj+rHJLUPTBAbXA+vL+eZcDiFkoGbrXMsHkYR5PW7xmClX3557D5A==
+-----END PUBLIC KEY-----
+`
+
+func TestCosignStep_VerifiesWithPublicKey(t *testing.T) {
+	g := NewWithT(t)
+	verifier := &fakeCosignVerifier{info: &oci.VerificationInfo{
+		Provider: apiv1.VerifyProviderCosign,
+		Digest:   "sha256:abc",
+	}}
+	minAge := &metav1.Duration{Duration: time.Hour}
+	step, err := CosignBuilder(verifier)(apiv1.HookStep{
+		Name:     "signature",
+		Provider: apiv1.HookProviderCosign,
+		Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{
+			PublicKey: testPublicKeyPEM,
+			MinAge:    minAge,
+		}},
+	})
+	g.Expect(err).ToNot(HaveOccurred())
+
+	outcome, err := runSingleUnit(step, Input{Source: "public-registry.wiz.io/charts/wiz-sensor", Tag: "1.0.13003", Digest: "sha256:abc"})
+
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(outcome.Verdict).To(Equal(apiv1.StepVerdictAllow))
+	g.Expect(verifier.keyCalls).To(Equal(1))
+	g.Expect(verifier.keyRef).To(Equal("public-registry.wiz.io/charts/wiz-sensor@sha256:abc"))
+	g.Expect(verifier.keyPEM).To(Equal(testPublicKeyPEM))
+	g.Expect(verifier.keyMinAge).To(Equal(minAge))
+	g.Expect(verifier.ref).To(BeEmpty(), "the keyless path must not run")
+	g.Expect(outcome.Cosign.Key).To(Equal("sha256:080cd7b20a0ec16356024a6ba09fec5a4556997579afd225b3604d0e6b119356"))
+	g.Expect(outcome.Cosign.Identity).To(BeEmpty())
+}
+
+func TestCosignStep_RejectsAnInvalidPublicKey(t *testing.T) {
+	g := NewWithT(t)
+	_, err := CosignBuilder(&fakeCosignVerifier{})(apiv1.HookStep{
+		Name:     "signature",
+		Provider: apiv1.HookProviderCosign,
+		Cosign:   &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{PublicKey: "not a key"}},
+	})
+	g.Expect(err).To(HaveOccurred())
 }

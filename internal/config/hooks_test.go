@@ -14,6 +14,12 @@ import (
 	apiv1 "github.com/fluxcd/flux-mirror/api/v1beta2"
 )
 
+const testPublicKey = `-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAENQlf6X0DsdsOYZGCbV83JVKne7Kp
+3XwxwGj+rHJLUPTBAbXA+vL+eZcDiFkoGbrXMsHkYR5PW7xmClX3557D5A==
+-----END PUBLIC KEY-----
+`
+
 func TestValidateArtifactHooks(t *testing.T) {
 	positive := 1
 	zero := 0
@@ -149,7 +155,44 @@ func TestValidateArtifactHooks(t *testing.T) {
 				Name: "signature", Provider: apiv1.HookProviderCosign,
 				Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{}},
 			},
-			err: "index: matchOIDCIdentity must contain at least one identity",
+			err: "index: one of matchOIDCIdentity and publicKey is required",
+		},
+		{
+			name: "valid key-based cosign step",
+			step: apiv1.HookStep{
+				Name: "signature", Provider: apiv1.HookProviderCosign,
+				Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{PublicKey: testPublicKey}},
+			},
+		},
+		{
+			name: "public key with identities",
+			step: apiv1.HookStep{
+				Name: "signature", Provider: apiv1.HookProviderCosign,
+				Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{
+					PublicKey:         testPublicKey,
+					MatchOIDCIdentity: []apiv1.OIDCIdentity{{Issuer: "issuer", Subject: "subject"}},
+				}},
+			},
+			err: "index: publicKey and matchOIDCIdentity are mutually exclusive",
+		},
+		{
+			name: "public key with attestations",
+			step: apiv1.HookStep{
+				Name: "signature", Provider: apiv1.HookProviderCosign,
+				Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{
+					PublicKey:    testPublicKey,
+					Attestations: []string{"spdx"},
+				}},
+			},
+			err: "index: attestations are not supported with publicKey",
+		},
+		{
+			name: "invalid public key",
+			step: apiv1.HookStep{
+				Name: "signature", Provider: apiv1.HookProviderCosign,
+				Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{PublicKey: "not a key"}},
+			},
+			err: "index: publicKey: ",
 		},
 		{
 			name: "platform without platforms",

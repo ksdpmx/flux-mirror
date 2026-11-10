@@ -6,6 +6,7 @@ package oci
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -18,6 +19,8 @@ import (
 	"github.com/sigstore/sigstore-go/pkg/bundle"
 	"github.com/sigstore/sigstore-go/pkg/root"
 	"github.com/sigstore/sigstore-go/pkg/verify"
+	"github.com/sigstore/sigstore/pkg/signature"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	apiv1 "github.com/fluxcd/flux-mirror/api/v1beta2"
 )
@@ -226,6 +229,63 @@ func (v *Verifier) VerifyWithDiscovery(
 	if len(cfg.MatchOIDCIdentity) == 0 {
 		return nil, fmt.Errorf("at least one OIDC identity matcher is required")
 	}
+	identityOptions, err := certificateIdentityOptions(cfg.MatchOIDCIdentity)
+	if err != nil {
+		return nil, err
+	}
+	return v.verifyDiscovered(ctx, ref, cfg.MinAge, discover, func(root.TrustedMaterial) (root.TrustedMaterial, []verify.VerifierOption, []verify.PolicyOption, error) {
+		return nil, []verify.VerifierOption{
+			verify.WithSignedCertificateTimestamps(1),
+			verify.WithIntegratedTimestamps(1),
+			verify.WithTransparencyLog(1),
+		}, identityOptions, nil
+	})
+}
+
+// VerifyWithKey verifies a key-based cosign signature found by discover: it
+// must have been made by publicKeyPEM and be in a transparency log. It
+// returns a *SignatureTooNewError with verification metadata when a valid
+// signature has not aged past minAge.
+func (v *Verifier) VerifyWithKey(
+	ctx context.Context,
+	ref string,
+	publicKeyPEM string,
+	minAge *metav1.Duration,
+	discover SignatureDiscoverer,
+) (*VerificationInfo, error) {
+	key, err := ParsePublicKeyPEM(publicKeyPEM)
+	if err != nil {
+		return nil, err
+	}
+	keyVerifier, err := signature.LoadVerifier(key, crypto.SHA256)
+	if err != nil {
+		return nil, fmt.Errorf("load public key verifier: %w", err)
+	}
+	// The bundle's key hint is not trusted: the signature has to verify under
+	// the configured key whatever the hint says.
+	keys := root.NewTrustedPublicKeyMaterial(func(string) (root.TimeConstrainedVerifier, error) {
+		return root.NewExpiringKey(keyVerifier, time.Time{}, time.Time{}), nil
+	})
+	return v.verifyDiscovered(ctx, ref, minAge, discover, func(trusted root.TrustedMaterial) (root.TrustedMaterial, []verify.VerifierOption, []verify.PolicyOption, error) {
+		return root.TrustedMaterialCollection{keys, trusted}, []verify.VerifierOption{
+			verify.WithIntegratedTimestamps(1),
+			verify.WithTransparencyLog(1),
+		}, []verify.PolicyOption{verify.WithKey()}, nil
+	})
+}
+
+// verifyDiscovered is the flow shared by the keyless and key-based checks:
+// resolve ref, discover the bundle, verify it with the trusted material, the
+// verifier options and the policy options that trust returns for the Sigstore
+// trusted root, and enforce minAge. A nil material from trust means the trusted
+// root alone.
+func (v *Verifier) verifyDiscovered(
+	ctx context.Context,
+	ref string,
+	minAge *metav1.Duration,
+	discover SignatureDiscoverer,
+	trust func(root.TrustedMaterial) (root.TrustedMaterial, []verify.VerifierOption, []verify.PolicyOption, error),
+) (*VerificationInfo, error) {
 	if discover == nil {
 		return nil, fmt.Errorf("signature discoverer is required")
 	}
@@ -252,18 +312,16 @@ func (v *Verifier) VerifyWithDiscovery(
 	if err != nil {
 		return nil, err
 	}
-	sigVerifier, err := verify.NewVerifier(
-		trustedRoot,
-		verify.WithSignedCertificateTimestamps(1),
-		verify.WithIntegratedTimestamps(1),
-		verify.WithTransparencyLog(1),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("create signature verifier: %w", err)
-	}
-	identityOptions, err := certificateIdentityOptions(cfg.MatchOIDCIdentity)
+	material, verifierOptions, policyOptions, err := trust(trustedRoot)
 	if err != nil {
 		return nil, err
+	}
+	if material == nil {
+		material = trustedRoot
+	}
+	sigVerifier, err := verify.NewVerifier(material, verifierOptions...)
+	if err != nil {
+		return nil, fmt.Errorf("create signature verifier: %w", err)
 	}
 	var artifact verify.ArtifactPolicyOption
 	if payload != nil {
@@ -275,7 +333,7 @@ func (v *Verifier) VerifyWithDiscovery(
 		}
 		artifact = verify.WithArtifactDigest(desc.Digest.Algorithm, digestBytes)
 	}
-	policy := verify.NewPolicy(artifact, identityOptions...)
+	policy := verify.NewPolicy(artifact, policyOptions...)
 	result, err := sigVerifier.Verify(sigstoreBundle, policy)
 	if err != nil {
 		return nil, NewSignatureRejectedError(fmt.Errorf("signature verification failed: %w", err))
@@ -292,8 +350,8 @@ func (v *Verifier) VerifyWithDiscovery(
 	if integratedTime, ok := signatureIntegratedTime(result); ok {
 		info.IntegratedTime = integratedTime
 	}
-	if cfg.MinAge != nil && cfg.MinAge.Duration > 0 {
-		if err := enforceMinAge(result, cfg.MinAge.Duration, time.Now()); err != nil {
+	if minAge != nil && minAge.Duration > 0 {
+		if err := enforceMinAge(result, minAge.Duration, time.Now()); err != nil {
 			var tooNew *SignatureTooNewError
 			if errors.As(err, &tooNew) {
 				return info, err

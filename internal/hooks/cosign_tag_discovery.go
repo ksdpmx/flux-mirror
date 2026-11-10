@@ -152,13 +152,24 @@ func buildCosignTagBundle(repo name.Repository, digest v1.Hash, layer v1.Descrip
 		return nil, nil, oci.NewSignatureRejectedError(fmt.Errorf("decode cosign tag signature: %w", err))
 	}
 
-	certPEM, ok := layer.Annotations[cosignTagAnnotationCertificate]
-	if !ok {
-		return nil, nil, oci.NewSignatureRejectedError(fmt.Errorf("cosign tag signature has no certificate; key-based signatures are not supported"))
-	}
-	certs, err := decodeCosignTagCertificateChain(certPEM, layer.Annotations[cosignTagAnnotationChain])
-	if err != nil {
-		return nil, nil, oci.NewSignatureRejectedError(err)
+	// A signature made with cosign sign --key has no certificate. Its bundle
+	// carries no key either: the verifier supplies the configured key, and a
+	// keyless policy rejects the bundle because it has no certificate.
+	var material *protobundle.VerificationMaterial
+	if certPEM, ok := layer.Annotations[cosignTagAnnotationCertificate]; ok {
+		certs, err := decodeCosignTagCertificateChain(certPEM, layer.Annotations[cosignTagAnnotationChain])
+		if err != nil {
+			return nil, nil, oci.NewSignatureRejectedError(err)
+		}
+		material = &protobundle.VerificationMaterial{
+			Content: &protobundle.VerificationMaterial_X509CertificateChain{
+				X509CertificateChain: &protocommon.X509CertificateChain{Certificates: certs},
+			},
+		}
+	} else {
+		material = &protobundle.VerificationMaterial{
+			Content: &protobundle.VerificationMaterial_PublicKey{PublicKey: &protocommon.PublicKeyIdentifier{}},
+		}
 	}
 
 	tlogEntries, err := decodeCosignTagTlogEntries(layer.Annotations[cosignTagAnnotationBundle])
@@ -166,19 +177,16 @@ func buildCosignTagBundle(repo name.Repository, digest v1.Hash, layer v1.Descrip
 		return nil, nil, oci.NewSignatureRejectedError(err)
 	}
 
+	material.TlogEntries = tlogEntries
+
 	digestSum := sha256.Sum256(payload)
 	mediaType, err := bundle.MediaTypeString(cosignTagBundleVersion)
 	if err != nil {
 		return nil, nil, fmt.Errorf("build sigstore bundle media type: %w", err)
 	}
 	pb := &protobundle.Bundle{
-		MediaType: mediaType,
-		VerificationMaterial: &protobundle.VerificationMaterial{
-			Content: &protobundle.VerificationMaterial_X509CertificateChain{
-				X509CertificateChain: &protocommon.X509CertificateChain{Certificates: certs},
-			},
-			TlogEntries: tlogEntries,
-		},
+		MediaType:            mediaType,
+		VerificationMaterial: material,
 		Content: &protobundle.Bundle_MessageSignature{
 			MessageSignature: &protocommon.MessageSignature{
 				MessageDigest: &protocommon.HashOutput{

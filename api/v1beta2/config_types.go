@@ -613,7 +613,7 @@ type HookStep struct {
 	// +optional
 	OnError string `json:"onError,omitempty"`
 
-	// Cosign configures keyless cosign verification for this step.
+	// Cosign configures cosign verification for this step.
 	// +optional
 	Cosign *CosignHookConfig `json:"cosign,omitempty"`
 
@@ -622,7 +622,7 @@ type HookStep struct {
 	Wizcli *WizcliHookConfig `json:"wizcli,omitempty"`
 }
 
-// CosignHookConfig configures cosign keyless verification for a hook. Index
+// CosignHookConfig configures cosign verification for a hook. Index
 // and Platform say which digests are verified, each with its own policy, and at
 // least one is required.
 type CosignHookConfig struct {
@@ -638,17 +638,27 @@ type CosignHookConfig struct {
 }
 
 // CosignPolicy is what must hold for one digest: a signature by one of the
-// identities and, optionally, attestations.
+// keyless identities or by a public key, and, for keyless, optionally
+// attestations. Exactly one of MatchOIDCIdentity and PublicKey is required.
 type CosignPolicy struct {
-	// MatchOIDCIdentity lists the Fulcio certificate identities to accept.
-	MatchOIDCIdentity []OIDCIdentity `json:"matchOIDCIdentity"`
+	// MatchOIDCIdentity lists the Fulcio certificate identities to accept
+	// (keyless). It cannot be combined with PublicKey.
+	// +optional
+	MatchOIDCIdentity []OIDCIdentity `json:"matchOIDCIdentity,omitempty"`
+
+	// PublicKey is a PEM-encoded public key (ECDSA, RSA or Ed25519) that must
+	// have made the signature (key-based, as with cosign sign --key). The
+	// signature must also be in a transparency log. It cannot be combined with
+	// MatchOIDCIdentity or Attestations.
+	// +optional
+	PublicKey string `json:"publicKey,omitempty"`
 
 	// MinAge requires a signature to be at least this old before mirroring.
 	// +optional
 	MinAge *metav1.Duration `json:"minAge,omitempty"`
 
 	// Attestations lists the attestations that must be attached to the digest
-	// and signed by one of MatchOIDCIdentity, each as a short alias (spdx,
+	// and signed by one of MatchOIDCIdentity (not supported with PublicKey), each as a short alias (spdx,
 	// slsa-provenance, cyclonedx) or a full predicate type URI. They are read
 	// from the cosign tag-based .att tag of the verified digest.
 	// +optional

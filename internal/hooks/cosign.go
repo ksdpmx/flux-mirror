@@ -10,12 +10,15 @@ import (
 	"sync"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	apiv1 "github.com/fluxcd/flux-mirror/api/v1beta2"
 	"github.com/fluxcd/flux-mirror/internal/oci"
 )
 
 type cosignVerifier interface {
 	VerifyWithDiscovery(context.Context, string, apiv1.ArtifactVerification, oci.SignatureDiscoverer) (*oci.VerificationInfo, error)
+	VerifyWithKey(context.Context, string, string, *metav1.Duration, oci.SignatureDiscoverer) (*oci.VerificationInfo, error)
 	VerifyAttestations(context.Context, string, []apiv1.OIDCIdentity, []string, oci.AttestationDiscoverer) ([]string, error)
 	ResolvePlatforms(context.Context, string, []string) (map[string]string, error)
 }
@@ -33,11 +36,17 @@ func CosignBuilder(verifier cosignVerifier) Builder {
 		}
 		step := cosignStep{verifier: verifier}
 		if config.Cosign.Index != nil {
-			policy := newCosignPolicy(*config.Cosign.Index)
+			policy, err := newCosignPolicy(*config.Cosign.Index)
+			if err != nil {
+				return nil, err
+			}
 			step.index = &policy
 		}
 		if config.Cosign.Platform != nil {
-			policy := newCosignPolicy(config.Cosign.Platform.CosignPolicy)
+			policy, err := newCosignPolicy(config.Cosign.Platform.CosignPolicy)
+			if err != nil {
+				return nil, err
+			}
 			step.platform = &policy
 			step.platforms = config.Cosign.Platform.Platforms
 		}
@@ -48,21 +57,36 @@ func CosignBuilder(verifier cosignVerifier) Builder {
 	}
 }
 
-// cosignPolicy is what must hold for one digest.
+// cosignPolicy is what must hold for one digest. With a publicKey the
+// signature is key-based and keyFingerprint names the key in the report;
+// otherwise it is keyless and config holds the identities.
 type cosignPolicy struct {
-	config       apiv1.ArtifactVerification
-	attestations []string
+	config         apiv1.ArtifactVerification
+	attestations   []string
+	publicKey      string
+	keyFingerprint string
 }
 
-func newCosignPolicy(p apiv1.CosignPolicy) cosignPolicy {
-	return cosignPolicy{
+func newCosignPolicy(p apiv1.CosignPolicy) (cosignPolicy, error) {
+	policy := cosignPolicy{
 		config: apiv1.ArtifactVerification{
 			Provider:          apiv1.VerifyProviderCosign,
 			MatchOIDCIdentity: p.MatchOIDCIdentity,
 			MinAge:            p.MinAge,
 		},
 		attestations: p.Attestations,
+		publicKey:    p.PublicKey,
 	}
+	if p.PublicKey != "" {
+		key, err := oci.ParsePublicKeyPEM(p.PublicKey)
+		if err != nil {
+			return cosignPolicy{}, err
+		}
+		if policy.keyFingerprint, err = oci.PublicKeyFingerprint(key); err != nil {
+			return cosignPolicy{}, err
+		}
+	}
+	return policy, nil
 }
 
 type cosignStep struct {
@@ -137,7 +161,13 @@ func (r *platformResolver) digest(ctx context.Context, platform string) (string,
 // verify checks the signature of ref and then its attestations. The digest is
 // the one ref pins; the verifier must report the same one.
 func (s cosignStep) verify(ctx context.Context, ref, digest string, policy cosignPolicy) (Outcome, error) {
-	info, err := s.verifier.VerifyWithDiscovery(ctx, ref, policy.config, discoverCosignBundle)
+	var info *oci.VerificationInfo
+	var err error
+	if policy.publicKey != "" {
+		info, err = s.verifier.VerifyWithKey(ctx, ref, policy.publicKey, policy.config.MinAge, discoverCosignBundle)
+	} else {
+		info, err = s.verifier.VerifyWithDiscovery(ctx, ref, policy.config, discoverCosignBundle)
+	}
 	if err != nil {
 		var tooNew *oci.SignatureTooNewError
 		if errors.As(err, &tooNew) {
@@ -147,7 +177,7 @@ func (s cosignStep) verify(ctx context.Context, ref, digest string, policy cosig
 			return Outcome{
 				Verdict: apiv1.StepVerdictSkip,
 				Reason:  apiv1.ReasonSignatureTooNew,
-				Cosign:  cosignVerification(info, tooNew),
+				Cosign:  cosignVerification(info, tooNew, policy),
 			}, nil
 		}
 		var rejected *oci.SignatureRejectedError
@@ -166,7 +196,7 @@ func (s cosignStep) verify(ctx context.Context, ref, digest string, policy cosig
 		return Outcome{}, fmt.Errorf("cosign verifier returned digest %q, want %q", info.Digest, digest)
 	}
 
-	verification := cosignVerification(info, nil)
+	verification := cosignVerification(info, nil, policy)
 	if len(policy.attestations) > 0 {
 		types, err := s.verifier.VerifyAttestations(ctx, ref, policy.config.MatchOIDCIdentity, policy.attestations, discoverCosignAttestations)
 		if err != nil {
@@ -185,11 +215,12 @@ func (s cosignStep) verify(ctx context.Context, ref, digest string, policy cosig
 	}, nil
 }
 
-func cosignVerification(info *oci.VerificationInfo, tooNew *oci.SignatureTooNewError) *apiv1.Verification {
+func cosignVerification(info *oci.VerificationInfo, tooNew *oci.SignatureTooNewError, policy cosignPolicy) *apiv1.Verification {
 	verification := &apiv1.Verification{
 		Provider: apiv1.VerifyProviderCosign,
 		Issuer:   info.Issuer,
 		Identity: info.Identity,
+		Key:      policy.keyFingerprint,
 	}
 	if !info.IntegratedTime.IsZero() {
 		verification.IntegratedTime = info.IntegratedTime.UTC().Format(time.RFC3339)

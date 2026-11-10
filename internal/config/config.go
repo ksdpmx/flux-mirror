@@ -24,6 +24,7 @@ import (
 	apiv1 "github.com/fluxcd/flux-mirror/api/v1beta2"
 	"github.com/fluxcd/flux-mirror/internal/envelope"
 	"github.com/fluxcd/flux-mirror/internal/helmrepo"
+	"github.com/fluxcd/flux-mirror/internal/oci"
 )
 
 // DeprecatedV1Beta1APIVersion is the deprecated v1beta1 apiVersion. A config
@@ -674,6 +675,12 @@ func validateCosignHook(c apiv1.CosignHookConfig) error {
 }
 
 func validateCosignPolicy(p apiv1.CosignPolicy) error {
+	if p.PublicKey != "" {
+		return validateCosignKeyPolicy(p)
+	}
+	if len(p.MatchOIDCIdentity) == 0 {
+		return fmt.Errorf("one of matchOIDCIdentity and publicKey is required")
+	}
 	verification := apiv1.ArtifactVerification{
 		Provider:          apiv1.VerifyProviderCosign,
 		MatchOIDCIdentity: p.MatchOIDCIdentity,
@@ -683,6 +690,25 @@ func validateCosignPolicy(p apiv1.CosignPolicy) error {
 		return err
 	}
 	return validateAttestations(p.Attestations)
+}
+
+// validateCosignKeyPolicy checks a key-based policy: the key must parse, and
+// keyless identities and attestations (which are verified against identities)
+// cannot be combined with it.
+func validateCosignKeyPolicy(p apiv1.CosignPolicy) error {
+	if len(p.MatchOIDCIdentity) > 0 {
+		return fmt.Errorf("publicKey and matchOIDCIdentity are mutually exclusive")
+	}
+	if len(p.Attestations) > 0 {
+		return fmt.Errorf("attestations are not supported with publicKey")
+	}
+	if p.MinAge != nil && p.MinAge.Duration < 0 {
+		return fmt.Errorf("minAge must be >= 0")
+	}
+	if _, err := oci.ParsePublicKeyPEM(p.PublicKey); err != nil {
+		return fmt.Errorf("publicKey: %w", err)
+	}
+	return nil
 }
 
 func validatePlatforms(platforms []string) error {
