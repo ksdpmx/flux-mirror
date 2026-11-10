@@ -637,10 +637,10 @@ type CosignHookConfig struct {
 	Platform *CosignPlatformPolicy `json:"platform,omitempty"`
 }
 
-// CosignPolicy is what must hold for one digest: a signature by one of the
-// keyless identities or by a public key, and, for keyless, optionally
-// attestations. Exactly one of MatchOIDCIdentity and PublicKey is required.
-type CosignPolicy struct {
+// CosignVerifier says whom to trust for a signature or an attestation: a
+// keyless identity or a public key. Exactly one of MatchOIDCIdentity and
+// PublicKey is required.
+type CosignVerifier struct {
 	// MatchOIDCIdentity lists the Fulcio certificate identities to accept
 	// (keyless). It cannot be combined with PublicKey.
 	// +optional
@@ -649,20 +649,44 @@ type CosignPolicy struct {
 	// PublicKey is a PEM-encoded public key (ECDSA, RSA or Ed25519) that must
 	// have made the signature (key-based, as with cosign sign --key). The
 	// signature must also be in a transparency log. It cannot be combined with
-	// MatchOIDCIdentity or Attestations.
+	// MatchOIDCIdentity.
 	// +optional
 	PublicKey string `json:"publicKey,omitempty"`
+}
 
-	// MinAge requires a signature to be at least this old before mirroring.
+// CosignSignature is the signature that must be on a digest.
+type CosignSignature struct {
+	CosignVerifier `json:",inline"`
+
+	// MinAge requires the signature to be at least this old before mirroring.
+	// It applies to the signature only, not to attestations.
 	// +optional
 	MinAge *metav1.Duration `json:"minAge,omitempty"`
+}
 
-	// Attestations lists the attestations that must be attached to the digest
-	// and signed by one of MatchOIDCIdentity (not supported with PublicKey), each as a short alias (spdx,
-	// slsa-provenance, cyclonedx) or a full predicate type URI. They are read
-	// from the cosign tag-based .att tag of the verified digest.
+// CosignAttestation is an attestation of one predicate type that must be
+// attached to a digest. It names its own verifier, which is not inherited from
+// the signature, because attestations are often signed by another identity
+// (for example the SLSA generator).
+type CosignAttestation struct {
+	// Type is the predicate type, as a short alias (spdx, slsa-provenance,
+	// cyclonedx) or a full predicate type URI.
+	Type string `json:"type"`
+
+	CosignVerifier `json:",inline"`
+}
+
+// CosignPolicy is what must hold for one digest: a signature and, optionally,
+// attestations.
+type CosignPolicy struct {
+	// Signature is the signature to verify. It is always checked first.
+	Signature CosignSignature `json:"signature"`
+
+	// Attestations lists the attestations that must be attached to the digest,
+	// each with its own verifier. They are read from the cosign tag-based .att
+	// tag of the verified digest.
 	// +optional
-	Attestations []string `json:"attestations,omitempty"`
+	Attestations []CosignAttestation `json:"attestations,omitempty"`
 }
 
 // CosignPlatformPolicy is a CosignPolicy applied to each listed platform of a

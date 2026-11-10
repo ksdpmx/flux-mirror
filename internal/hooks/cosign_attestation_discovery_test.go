@@ -152,14 +152,14 @@ func TestDiscoverCosignAttestations(t *testing.T) {
 		g.Expect(count).To(Equal(1))
 	})
 
-	t.Run("a layer without a certificate is left out", func(t *testing.T) {
+	t.Run("a layer without a certificate is a key-based attestation", func(t *testing.T) {
 		g := NewWithT(t)
 		count := discoverAttestations(t, "cosign-att-nocert", func(t testing.TB, repoAddr string, digest v1.Hash) {
-			keyless := newAttestationLayer(t, "https://spdx.dev/Document")
-			delete(keyless.annotations, cosignTagAnnotationCertificate)
-			pushCosignAttestations(t, repoAddr, digest, keyless, newAttestationLayer(t, "https://slsa.dev/provenance/v1"))
+			keyBased := newAttestationLayer(t, "https://spdx.dev/Document")
+			delete(keyBased.annotations, cosignTagAnnotationCertificate)
+			pushCosignAttestations(t, repoAddr, digest, keyBased, newAttestationLayer(t, "https://slsa.dev/provenance/v1"))
 		})
-		g.Expect(count).To(Equal(1))
+		g.Expect(count).To(Equal(2))
 	})
 
 	t.Run("a layer that is not a DSSE envelope is left out", func(t *testing.T) {

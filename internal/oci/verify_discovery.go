@@ -53,48 +53,101 @@ type SignatureDiscoverer func(name.Repository, v1.Hash, ...remote.Option) (*bund
 // leaves out what it cannot read. No attestation at all is an empty result.
 type AttestationDiscoverer func(name.Repository, v1.Hash, ...remote.Option) ([]verify.SignedEntity, error)
 
-// VerifyAttestations verifies that an attestation of every required predicate
-// type is attached to the digest of ref and signed by one of identities. The
-// predicate type is read from the verified in-toto statement, never from the
-// registry's annotations, and the statement must be about the digest. It
-// returns the required predicate types as full URIs, in the order given. A
-// missing attestation returns a *SignatureRejectedError.
-func (v *Verifier) VerifyAttestations(
+// AttestationTrust says whom to trust for an attestation: one of the keyless
+// Identities and a PublicKeyPEM, exactly one of which is set.
+type AttestationTrust struct {
+	Identities   []apiv1.OIDCIdentity
+	PublicKeyPEM string
+}
+
+// VerifyAttestation verifies that an attestation of the predicate type is
+// attached to the digest of ref and made by trust. The predicate type is read
+// from the verified in-toto statement, never from the registry's annotations,
+// and the statement must be about the digest. It returns the predicate type as
+// a full URI. A missing attestation returns a *SignatureRejectedError.
+func (v *Verifier) VerifyAttestation(
 	ctx context.Context,
 	ref string,
-	identities []apiv1.OIDCIdentity,
-	required []string,
+	predicateType string,
+	trust AttestationTrust,
 	discover AttestationDiscoverer,
-) ([]string, error) {
-	if len(identities) == 0 {
-		return nil, fmt.Errorf("at least one OIDC identity matcher is required")
-	}
-	if len(required) == 0 {
-		return nil, fmt.Errorf("at least one attestation predicate type is required")
+) (string, error) {
+	if predicateType == "" {
+		return "", fmt.Errorf("an attestation predicate type is required")
 	}
 	if discover == nil {
-		return nil, fmt.Errorf("attestation discoverer is required")
+		return "", fmt.Errorf("attestation discoverer is required")
+	}
+	if (len(trust.Identities) == 0) == (trust.PublicKeyPEM == "") {
+		return "", fmt.Errorf("exactly one of an OIDC identity matcher and a public key is required")
 	}
 
 	ref = strings.TrimPrefix(ref, "oci://")
 	parsed, err := name.ParseReference(ref, v.client.staticNameOpts...)
 	if err != nil {
-		return nil, fmt.Errorf("parse reference %q: %w", ref, err)
+		return "", fmt.Errorf("parse reference %q: %w", ref, err)
 	}
 	opts := v.remoteOptions(ctx)
 	desc, err := remote.Get(parsed, opts...)
 	if err != nil {
-		return nil, fmt.Errorf("fetch descriptor for %q: %w", ref, err)
+		return "", fmt.Errorf("fetch descriptor for %q: %w", ref, err)
 	}
 	entities, err := discover(parsed.Context(), desc.Digest, opts...)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	trustedRoot, err := v.getTrustedRoot()
 	if err != nil {
+		return "", err
+	}
+
+	var (
+		material        root.TrustedMaterial = trustedRoot
+		verifierOptions                      = attestationVerifierOptions()
+		policyOptions   []verify.PolicyOption
+	)
+	if trust.PublicKeyPEM != "" {
+		keys, err := publicKeyMaterial(trust.PublicKeyPEM)
+		if err != nil {
+			return "", err
+		}
+		material = root.TrustedMaterialCollection{keys, trustedRoot}
+		verifierOptions = keyVerifierOptions()
+		policyOptions = []verify.PolicyOption{verify.WithKey()}
+	} else if policyOptions, err = certificateIdentityOptions(trust.Identities); err != nil {
+		return "", err
+	}
+	types, err := verifyAttestationEntities(material, desc.Digest, entities, []string{predicateType}, policyOptions, verifierOptions)
+	if err != nil {
+		return "", err
+	}
+	return types[0], nil
+}
+
+// publicKeyMaterial trusts the configured key whatever key hint a bundle
+// carries: the signature has to verify under this key anyway.
+func publicKeyMaterial(publicKeyPEM string) (root.TrustedMaterial, error) {
+	key, err := ParsePublicKeyPEM(publicKeyPEM)
+	if err != nil {
 		return nil, err
 	}
-	return verifyAttestationEntities(trustedRoot, desc.Digest, entities, identities, required, attestationVerifierOptions())
+	keyVerifier, err := signature.LoadVerifier(key, crypto.SHA256)
+	if err != nil {
+		return nil, fmt.Errorf("load public key verifier: %w", err)
+	}
+	return root.NewTrustedPublicKeyMaterial(func(string) (root.TimeConstrainedVerifier, error) {
+		return root.NewExpiringKey(keyVerifier, time.Time{}, time.Time{}), nil
+	}), nil
+}
+
+// keyVerifierOptions are the checks a key-based signature must pass: a
+// transparency log entry with its integrated timestamp. There is no
+// certificate, so no signed certificate timestamp.
+func keyVerifierOptions() []verify.VerifierOption {
+	return []verify.VerifierOption{
+		verify.WithIntegratedTimestamps(1),
+		verify.WithTransparencyLog(1),
+	}
 }
 
 // ResolvePlatforms reads the image index of ref and returns the manifest digest
@@ -142,8 +195,8 @@ func (v *Verifier) ResolvePlatforms(ctx context.Context, ref string, platforms [
 	return digests, nil
 }
 
-// attestationVerifierOptions are the checks every attestation must pass: a
-// signed certificate timestamp, and a transparency log entry with its
+// attestationVerifierOptions are the checks every keyless attestation must
+// pass: a signed certificate timestamp, and a transparency log entry with its
 // integrated timestamp.
 func attestationVerifierOptions() []verify.VerifierOption {
 	return []verify.VerifierOption{
@@ -157,23 +210,19 @@ func verifyAttestationEntities(
 	material root.TrustedMaterial,
 	digest v1.Hash,
 	entities []verify.SignedEntity,
-	identities []apiv1.OIDCIdentity,
 	required []string,
+	policyOptions []verify.PolicyOption,
 	verifierOptions []verify.VerifierOption,
 ) ([]string, error) {
 	sigVerifier, err := verify.NewVerifier(material, verifierOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("create attestation verifier: %w", err)
 	}
-	identityOptions, err := certificateIdentityOptions(identities)
-	if err != nil {
-		return nil, err
-	}
 	digestBytes, err := hex.DecodeString(digest.Hex)
 	if err != nil {
 		return nil, fmt.Errorf("decode digest %s: %w", digest, err)
 	}
-	policy := verify.NewPolicy(verify.WithArtifactDigest(digest.Algorithm, digestBytes), identityOptions...)
+	policy := verify.NewPolicy(verify.WithArtifactDigest(digest.Algorithm, digestBytes), policyOptions...)
 
 	verified := make(map[string]struct{}, len(entities))
 	var failures []string
@@ -253,24 +302,12 @@ func (v *Verifier) VerifyWithKey(
 	minAge *metav1.Duration,
 	discover SignatureDiscoverer,
 ) (*VerificationInfo, error) {
-	key, err := ParsePublicKeyPEM(publicKeyPEM)
+	keys, err := publicKeyMaterial(publicKeyPEM)
 	if err != nil {
 		return nil, err
 	}
-	keyVerifier, err := signature.LoadVerifier(key, crypto.SHA256)
-	if err != nil {
-		return nil, fmt.Errorf("load public key verifier: %w", err)
-	}
-	// The bundle's key hint is not trusted: the signature has to verify under
-	// the configured key whatever the hint says.
-	keys := root.NewTrustedPublicKeyMaterial(func(string) (root.TimeConstrainedVerifier, error) {
-		return root.NewExpiringKey(keyVerifier, time.Time{}, time.Time{}), nil
-	})
 	return v.verifyDiscovered(ctx, ref, minAge, discover, func(trusted root.TrustedMaterial) (root.TrustedMaterial, []verify.VerifierOption, []verify.PolicyOption, error) {
-		return root.TrustedMaterialCollection{keys, trusted}, []verify.VerifierOption{
-			verify.WithIntegratedTimestamps(1),
-			verify.WithTransparencyLog(1),
-		}, []verify.PolicyOption{verify.WithKey()}, nil
+		return root.TrustedMaterialCollection{keys, trusted}, keyVerifierOptions(), []verify.PolicyOption{verify.WithKey()}, nil
 	})
 }
 

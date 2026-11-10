@@ -10,6 +10,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/name"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/sigstore/sigstore-go/pkg/verify"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	apiv1 "github.com/fluxcd/flux-mirror/api/v1beta2"
@@ -19,7 +23,7 @@ import (
 type cosignVerifier interface {
 	VerifyWithDiscovery(context.Context, string, apiv1.ArtifactVerification, oci.SignatureDiscoverer) (*oci.VerificationInfo, error)
 	VerifyWithKey(context.Context, string, string, *metav1.Duration, oci.SignatureDiscoverer) (*oci.VerificationInfo, error)
-	VerifyAttestations(context.Context, string, []apiv1.OIDCIdentity, []string, oci.AttestationDiscoverer) ([]string, error)
+	VerifyAttestation(context.Context, string, string, oci.AttestationTrust, oci.AttestationDiscoverer) (string, error)
 	ResolvePlatforms(context.Context, string, []string) (map[string]string, error)
 }
 
@@ -57,34 +61,58 @@ func CosignBuilder(verifier cosignVerifier) Builder {
 	}
 }
 
-// cosignPolicy is what must hold for one digest. With a publicKey the
-// signature is key-based and keyFingerprint names the key in the report;
-// otherwise it is keyless and config holds the identities.
-type cosignPolicy struct {
-	config         apiv1.ArtifactVerification
-	attestations   []string
+// cosignTrust is whom to trust for a signature or an attestation. With a
+// publicKey it is key-based and keyFingerprint names the key in the report;
+// otherwise it is keyless and identities holds the identities.
+type cosignTrust struct {
+	identities     []apiv1.OIDCIdentity
 	publicKey      string
 	keyFingerprint string
 }
 
-func newCosignPolicy(p apiv1.CosignPolicy) (cosignPolicy, error) {
-	policy := cosignPolicy{
-		config: apiv1.ArtifactVerification{
-			Provider:          apiv1.VerifyProviderCosign,
-			MatchOIDCIdentity: p.MatchOIDCIdentity,
-			MinAge:            p.MinAge,
-		},
-		attestations: p.Attestations,
-		publicKey:    p.PublicKey,
-	}
-	if p.PublicKey != "" {
-		key, err := oci.ParsePublicKeyPEM(p.PublicKey)
+func newCosignTrust(v apiv1.CosignVerifier) (cosignTrust, error) {
+	trust := cosignTrust{identities: v.MatchOIDCIdentity, publicKey: v.PublicKey}
+	if v.PublicKey != "" {
+		key, err := oci.ParsePublicKeyPEM(v.PublicKey)
 		if err != nil {
-			return cosignPolicy{}, err
+			return cosignTrust{}, err
 		}
-		if policy.keyFingerprint, err = oci.PublicKeyFingerprint(key); err != nil {
-			return cosignPolicy{}, err
+		if trust.keyFingerprint, err = oci.PublicKeyFingerprint(key); err != nil {
+			return cosignTrust{}, err
 		}
+	}
+	return trust, nil
+}
+
+// cosignPolicy is what must hold for one digest: a signature and attestations,
+// each with its own trust.
+type cosignPolicy struct {
+	signature    cosignTrust
+	minAge       *metav1.Duration
+	attestations []cosignAttestationPolicy
+}
+
+type cosignAttestationPolicy struct {
+	predicateType string
+	trust         cosignTrust
+}
+
+func newCosignPolicy(p apiv1.CosignPolicy) (cosignPolicy, error) {
+	signature, err := newCosignTrust(p.Signature.CosignVerifier)
+	if err != nil {
+		return cosignPolicy{}, fmt.Errorf("signature: %w", err)
+	}
+	policy := cosignPolicy{signature: signature, minAge: p.Signature.MinAge}
+	for i, a := range p.Attestations {
+		predicateType, ok := apiv1.EffectivePredicateType(a.Type)
+		if !ok {
+			return cosignPolicy{}, fmt.Errorf("attestations[%d]: %q is not a predicate type", i, a.Type)
+		}
+		trust, err := newCosignTrust(a.CosignVerifier)
+		if err != nil {
+			return cosignPolicy{}, fmt.Errorf("attestations[%d]: %w", i, err)
+		}
+		policy.attestations = append(policy.attestations, cosignAttestationPolicy{predicateType: predicateType, trust: trust})
 	}
 	return policy, nil
 }
@@ -163,10 +191,15 @@ func (r *platformResolver) digest(ctx context.Context, platform string) (string,
 func (s cosignStep) verify(ctx context.Context, ref, digest string, policy cosignPolicy) (Outcome, error) {
 	var info *oci.VerificationInfo
 	var err error
-	if policy.publicKey != "" {
-		info, err = s.verifier.VerifyWithKey(ctx, ref, policy.publicKey, policy.config.MinAge, discoverCosignBundle)
+	sig := policy.signature
+	if sig.publicKey != "" {
+		info, err = s.verifier.VerifyWithKey(ctx, ref, sig.publicKey, policy.minAge, discoverCosignBundle)
 	} else {
-		info, err = s.verifier.VerifyWithDiscovery(ctx, ref, policy.config, discoverCosignBundle)
+		info, err = s.verifier.VerifyWithDiscovery(ctx, ref, apiv1.ArtifactVerification{
+			Provider:          apiv1.VerifyProviderCosign,
+			MatchOIDCIdentity: sig.identities,
+			MinAge:            policy.minAge,
+		}, discoverCosignBundle)
 	}
 	if err != nil {
 		var tooNew *oci.SignatureTooNewError
@@ -177,7 +210,7 @@ func (s cosignStep) verify(ctx context.Context, ref, digest string, policy cosig
 			return Outcome{
 				Verdict: apiv1.StepVerdictSkip,
 				Reason:  apiv1.ReasonSignatureTooNew,
-				Cosign:  cosignVerification(info, tooNew, policy),
+				Cosign:  cosignVerification(info, tooNew, sig),
 			}, nil
 		}
 		var rejected *oci.SignatureRejectedError
@@ -196,9 +229,14 @@ func (s cosignStep) verify(ctx context.Context, ref, digest string, policy cosig
 		return Outcome{}, fmt.Errorf("cosign verifier returned digest %q, want %q", info.Digest, digest)
 	}
 
-	verification := cosignVerification(info, nil, policy)
-	if len(policy.attestations) > 0 {
-		types, err := s.verifier.VerifyAttestations(ctx, ref, policy.config.MatchOIDCIdentity, policy.attestations, discoverCosignAttestations)
+	verification := cosignVerification(info, nil, sig)
+	// The .att tag is read once for all the attestations of this digest.
+	discover := memoizeAttestations(discoverCosignAttestations)
+	for _, att := range policy.attestations {
+		predicateType, err := s.verifier.VerifyAttestation(ctx, ref, att.predicateType, oci.AttestationTrust{
+			Identities:   att.trust.identities,
+			PublicKeyPEM: att.trust.publicKey,
+		}, discover)
 		if err != nil {
 			var rejected *oci.SignatureRejectedError
 			if errors.As(err, &rejected) {
@@ -206,7 +244,7 @@ func (s cosignStep) verify(ctx context.Context, ref, digest string, policy cosig
 			}
 			return Outcome{}, err
 		}
-		verification.Attestations = types
+		verification.Attestations = append(verification.Attestations, predicateType)
 	}
 
 	return Outcome{
@@ -215,12 +253,40 @@ func (s cosignStep) verify(ctx context.Context, ref, digest string, policy cosig
 	}, nil
 }
 
-func cosignVerification(info *oci.VerificationInfo, tooNew *oci.SignatureTooNewError, policy cosignPolicy) *apiv1.Verification {
+// memoizeAttestations wraps discover so that the attestations of a digest are
+// read once, however many attestation policies are checked against them. A
+// failure is not kept.
+func memoizeAttestations(discover oci.AttestationDiscoverer) oci.AttestationDiscoverer {
+	type key struct {
+		repo   string
+		digest string
+	}
+	var (
+		mu    sync.Mutex
+		cache = map[key][]verify.SignedEntity{}
+	)
+	return func(repo name.Repository, digest v1.Hash, opts ...remote.Option) ([]verify.SignedEntity, error) {
+		k := key{repo: repo.String(), digest: digest.String()}
+		mu.Lock()
+		defer mu.Unlock()
+		if entities, ok := cache[k]; ok {
+			return entities, nil
+		}
+		entities, err := discover(repo, digest, opts...)
+		if err != nil {
+			return nil, err
+		}
+		cache[k] = entities
+		return entities, nil
+	}
+}
+
+func cosignVerification(info *oci.VerificationInfo, tooNew *oci.SignatureTooNewError, trust cosignTrust) *apiv1.Verification {
 	verification := &apiv1.Verification{
 		Provider: apiv1.VerifyProviderCosign,
 		Issuer:   info.Issuer,
 		Identity: info.Identity,
-		Key:      policy.keyFingerprint,
+		Key:      trust.keyFingerprint,
 	}
 	if !info.IntegratedTime.IsZero() {
 		verification.IntegratedTime = info.IntegratedTime.UTC().Format(time.RFC3339)

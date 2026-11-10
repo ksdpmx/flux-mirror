@@ -24,6 +24,14 @@ const (
 
 var platformIdentities = []apiv1.OIDCIdentity{{Issuer: "issuer", Subject: "subject"}}
 
+func platformSignature() apiv1.CosignSignature {
+	return signatureBy(apiv1.CosignVerifier{MatchOIDCIdentity: platformIdentities})
+}
+
+func platformAttestation(attestationType string) apiv1.CosignAttestation {
+	return apiv1.CosignAttestation{Type: attestationType, CosignVerifier: apiv1.CosignVerifier{MatchOIDCIdentity: platformIdentities}}
+}
+
 func platformVerifier() *fakeCosignVerifier {
 	info := func(digest string) *oci.VerificationInfo {
 		return &oci.VerificationInfo{Provider: apiv1.VerifyProviderCosign, Digest: digest, Issuer: "issuer", Identity: "subject"}
@@ -51,7 +59,7 @@ func platformInput() Input {
 
 func platformPolicy(platforms ...string) *apiv1.CosignPlatformPolicy {
 	return &apiv1.CosignPlatformPolicy{
-		CosignPolicy: apiv1.CosignPolicy{MatchOIDCIdentity: platformIdentities},
+		CosignPolicy: apiv1.CosignPolicy{Signature: platformSignature()},
 		Platforms:    platforms,
 	}
 }
@@ -67,7 +75,7 @@ func unitNames(units []Unit) []string {
 func TestCosignStep_IndexOnlyIsOneUnnamedUnit(t *testing.T) {
 	g := NewWithT(t)
 	verifier := platformVerifier()
-	step := platformStep(t, verifier, apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{MatchOIDCIdentity: platformIdentities}})
+	step := platformStep(t, verifier, apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{Signature: platformSignature()}})
 
 	units, err := step.Units(context.Background(), platformInput())
 
@@ -83,7 +91,7 @@ func TestCosignStep_IndexAndPlatformsAreSeparateUnits(t *testing.T) {
 	g := NewWithT(t)
 	verifier := platformVerifier()
 	step := platformStep(t, verifier, apiv1.CosignHookConfig{
-		Index:    &apiv1.CosignPolicy{MatchOIDCIdentity: platformIdentities},
+		Index:    &apiv1.CosignPolicy{Signature: platformSignature()},
 		Platform: platformPolicy("linux/amd64", "linux/arm64"),
 	})
 
@@ -151,11 +159,10 @@ func TestCosignStep_ResolveFailureIsNotCachedSoARetryAsksAgain(t *testing.T) {
 func TestCosignStep_EachPolicyHasItsOwnAttestations(t *testing.T) {
 	g := NewWithT(t)
 	verifier := platformVerifier()
-	verifier.attestationOut = []string{"https://spdx.dev/Document"}
 	platform := platformPolicy("linux/amd64")
-	platform.Attestations = []string{"spdx"}
+	platform.Attestations = []apiv1.CosignAttestation{platformAttestation("spdx")}
 	step := platformStep(t, verifier, apiv1.CosignHookConfig{
-		Index:    &apiv1.CosignPolicy{MatchOIDCIdentity: platformIdentities, Attestations: []string{"slsa-provenance"}},
+		Index:    &apiv1.CosignPolicy{Signature: platformSignature(), Attestations: []apiv1.CosignAttestation{platformAttestation("slsa-provenance")}},
 		Platform: platform,
 	})
 	units, err := step.Units(context.Background(), platformInput())
@@ -167,8 +174,8 @@ func TestCosignStep_EachPolicyHasItsOwnAttestations(t *testing.T) {
 	}
 
 	g.Expect(verifier.attestationLog).To(Equal([]attestationCall{
-		{ref: platformSource + "@" + platformIndexDigest, required: []string{"slsa-provenance"}},
-		{ref: platformSource + "@" + platformAMD64, required: []string{"spdx"}},
+		{ref: platformSource + "@" + platformIndexDigest, predicateType: "https://slsa.dev/provenance/v1", trust: oci.AttestationTrust{Identities: platformIdentities}},
+		{ref: platformSource + "@" + platformAMD64, predicateType: "https://spdx.dev/Document", trust: oci.AttestationTrust{Identities: platformIdentities}},
 	}))
 }
 
@@ -176,9 +183,9 @@ func TestCosignStep_AnIndexWithoutAttestationsDoesNotCheckThemOnPlatforms(t *tes
 	g := NewWithT(t)
 	verifier := platformVerifier()
 	platform := platformPolicy("linux/amd64")
-	platform.Attestations = []string{"spdx"}
+	platform.Attestations = []apiv1.CosignAttestation{platformAttestation("spdx")}
 	step := platformStep(t, verifier, apiv1.CosignHookConfig{
-		Index:    &apiv1.CosignPolicy{MatchOIDCIdentity: platformIdentities},
+		Index:    &apiv1.CosignPolicy{Signature: platformSignature()},
 		Platform: platform,
 	})
 	units, err := step.Units(context.Background(), platformInput())
@@ -200,7 +207,7 @@ func TestCosignStep_RunnerReportsEveryUnitAndADeniedPlatformDeniesTheTag(t *test
 		Name:     "signature",
 		Provider: apiv1.HookProviderCosign,
 		Cosign: &apiv1.CosignHookConfig{
-			Index:    &apiv1.CosignPolicy{MatchOIDCIdentity: platformIdentities},
+			Index:    &apiv1.CosignPolicy{Signature: platformSignature()},
 			Platform: platformPolicy("linux/amd64", "linux/arm64"),
 		},
 	}}}

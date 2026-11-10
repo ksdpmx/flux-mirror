@@ -105,31 +105,37 @@ func buildCosignAttestationBundle(repo name.Repository, layer v1.Descriptor, opt
 		signatures = append(signatures, &protodsse.Signature{Sig: sig, Keyid: s.KeyID})
 	}
 
-	certPEM, ok := layer.Annotations[cosignTagAnnotationCertificate]
-	if !ok {
-		return nil, errors.New("cosign attestation has no certificate; key-based attestations are not supported")
-	}
-	certs, err := decodeCosignTagCertificateChain(certPEM, layer.Annotations[cosignTagAnnotationChain])
-	if err != nil {
-		return nil, err
+	// An attestation made with cosign attest --key has no certificate. Its
+	// bundle carries no key either: the verifier supplies the configured key.
+	var material *protobundle.VerificationMaterial
+	if certPEM, ok := layer.Annotations[cosignTagAnnotationCertificate]; ok {
+		certs, err := decodeCosignTagCertificateChain(certPEM, layer.Annotations[cosignTagAnnotationChain])
+		if err != nil {
+			return nil, err
+		}
+		material = &protobundle.VerificationMaterial{
+			Content: &protobundle.VerificationMaterial_X509CertificateChain{
+				X509CertificateChain: &protocommon.X509CertificateChain{Certificates: certs},
+			},
+		}
+	} else {
+		material = &protobundle.VerificationMaterial{
+			Content: &protobundle.VerificationMaterial_PublicKey{PublicKey: &protocommon.PublicKeyIdentifier{}},
+		}
 	}
 	tlogEntries, err := decodeCosignTagTlogEntries(layer.Annotations[cosignTagAnnotationBundle])
 	if err != nil {
 		return nil, err
 	}
+	material.TlogEntries = tlogEntries
 	mediaType, err := bundle.MediaTypeString(cosignTagBundleVersion)
 	if err != nil {
 		return nil, fmt.Errorf("build sigstore bundle media type: %w", err)
 	}
 
 	return bundle.NewBundle(&protobundle.Bundle{
-		MediaType: mediaType,
-		VerificationMaterial: &protobundle.VerificationMaterial{
-			Content: &protobundle.VerificationMaterial_X509CertificateChain{
-				X509CertificateChain: &protocommon.X509CertificateChain{Certificates: certs},
-			},
-			TlogEntries: tlogEntries,
-		},
+		MediaType:            mediaType,
+		VerificationMaterial: material,
 		Content: &protobundle.Bundle_DsseEnvelope{
 			DsseEnvelope: &protodsse.Envelope{
 				Payload:     payload,

@@ -7,10 +7,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/name"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
 	. "github.com/onsi/gomega"
+	"github.com/sigstore/sigstore-go/pkg/verify"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	apiv1 "github.com/fluxcd/flux-mirror/api/v1beta2"
@@ -33,9 +38,6 @@ type fakeCosignVerifier struct {
 	attestationLog   []attestationCall
 	attestationCalls int
 	attestationRef   string
-	attestationIDs   []apiv1.OIDCIdentity
-	attestationTypes []string
-	attestationOut   []string
 	attestationErr   error
 
 	keyCalls  int
@@ -57,24 +59,26 @@ func (v *fakeCosignVerifier) ResolvePlatforms(_ context.Context, ref string, pla
 	return v.platformDigest, v.platformErr
 }
 
-func (v *fakeCosignVerifier) VerifyAttestations(
+func (v *fakeCosignVerifier) VerifyAttestation(
 	_ context.Context,
 	ref string,
-	identities []apiv1.OIDCIdentity,
-	required []string,
+	predicateType string,
+	trust oci.AttestationTrust,
 	_ oci.AttestationDiscoverer,
-) ([]string, error) {
+) (string, error) {
 	v.attestationCalls++
 	v.attestationRef = ref
-	v.attestationIDs = identities
-	v.attestationTypes = required
-	v.attestationLog = append(v.attestationLog, attestationCall{ref: ref, required: required})
-	return v.attestationOut, v.attestationErr
+	v.attestationLog = append(v.attestationLog, attestationCall{ref: ref, predicateType: predicateType, trust: trust})
+	if v.attestationErr != nil {
+		return "", v.attestationErr
+	}
+	return predicateType, nil
 }
 
 type attestationCall struct {
-	ref      string
-	required []string
+	ref           string
+	predicateType string
+	trust         oci.AttestationTrust
 }
 
 func (v *fakeCosignVerifier) VerifyWithDiscovery(
@@ -135,10 +139,10 @@ func TestCosignStep_VerifiesPinnedDigest(t *testing.T) {
 	stepConfig := apiv1.HookStep{
 		Name:     "signature",
 		Provider: apiv1.HookProviderCosign,
-		Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
+		Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{Signature: signatureBy(apiv1.CosignVerifier{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
 			Issuer:  "https://token.actions.githubusercontent.com",
 			Subject: `^https://github\.com/example/.*$`,
-		}}}},
+		}}})}},
 	}
 	builder := CosignBuilder(verifier)
 	step, err := builder(stepConfig)
@@ -151,7 +155,7 @@ func TestCosignStep_VerifiesPinnedDigest(t *testing.T) {
 	g.Expect(verifier.ref).To(Equal("ghcr.io/example/image@sha256:abc"))
 	g.Expect(verifier.discover).ToNot(BeNil())
 	g.Expect(verifier.cfg.Provider).To(Equal(apiv1.VerifyProviderCosign))
-	g.Expect(verifier.cfg.MatchOIDCIdentity).To(Equal(stepConfig.Cosign.Index.MatchOIDCIdentity))
+	g.Expect(verifier.cfg.MatchOIDCIdentity).To(Equal(stepConfig.Cosign.Index.Signature.MatchOIDCIdentity))
 	g.Expect(outcome.Verdict).To(Equal(apiv1.StepVerdictAllow))
 	g.Expect(outcome.Cosign).To(Equal(&apiv1.Verification{
 		Provider:       apiv1.VerifyProviderCosign,
@@ -182,10 +186,10 @@ func TestCosignStep_SkipsTooNewSignature(t *testing.T) {
 	stepConfig := apiv1.HookStep{
 		Name:     "signature",
 		Provider: apiv1.HookProviderCosign,
-		Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{
-			MatchOIDCIdentity: []apiv1.OIDCIdentity{{Issuer: "issuer", Subject: "subject"}},
-			MinAge:            &metav1.Duration{Duration: minAge},
-		}},
+		Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{Signature: apiv1.CosignSignature{
+			CosignVerifier: apiv1.CosignVerifier{MatchOIDCIdentity: []apiv1.OIDCIdentity{{Issuer: "issuer", Subject: "subject"}}},
+			MinAge:         &metav1.Duration{Duration: minAge},
+		}}},
 	}
 	step, err := CosignBuilder(verifier)(stepConfig)
 	g.Expect(err).ToNot(HaveOccurred())
@@ -209,9 +213,9 @@ func TestCosignStep_MapsSignatureRejectionToDeny(t *testing.T) {
 	step, err := CosignBuilder(verifier)(apiv1.HookStep{
 		Name:     "signature",
 		Provider: apiv1.HookProviderCosign,
-		Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
-			Issuer: "issuer", Subject: "subject",
-		}}}},
+		Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{Signature: signatureBy(apiv1.CosignVerifier{
+			MatchOIDCIdentity: []apiv1.OIDCIdentity{{Issuer: "issuer", Subject: "subject"}},
+		})}},
 	})
 	g.Expect(err).ToNot(HaveOccurred())
 
@@ -229,9 +233,9 @@ func TestCosignStep_PropagatesInfrastructureError(t *testing.T) {
 	step, err := CosignBuilder(verifier)(apiv1.HookStep{
 		Name:     "signature",
 		Provider: apiv1.HookProviderCosign,
-		Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{MatchOIDCIdentity: []apiv1.OIDCIdentity{{
-			Issuer: "issuer", Subject: "subject",
-		}}}},
+		Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{Signature: signatureBy(apiv1.CosignVerifier{
+			MatchOIDCIdentity: []apiv1.OIDCIdentity{{Issuer: "issuer", Subject: "subject"}},
+		})}},
 	})
 	g.Expect(err).ToNot(HaveOccurred())
 
@@ -241,35 +245,47 @@ func TestCosignStep_PropagatesInfrastructureError(t *testing.T) {
 	g.Expect(err).To(MatchError("registry unavailable"))
 }
 
-func attestationStep(t *testing.T, verifier *fakeCosignVerifier, attestations ...string) Step {
+func attestationStep(t *testing.T, verifier *fakeCosignVerifier, attestations ...apiv1.CosignAttestation) Step {
 	t.Helper()
 	step, err := CosignBuilder(verifier)(apiv1.HookStep{
 		Name:     "signature",
 		Provider: apiv1.HookProviderCosign,
 		Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{
-			MatchOIDCIdentity: []apiv1.OIDCIdentity{{Issuer: "issuer", Subject: "subject"}},
-			Attestations:      attestations,
+			Signature:    signatureBy(apiv1.CosignVerifier{MatchOIDCIdentity: []apiv1.OIDCIdentity{{Issuer: "issuer", Subject: "subject"}}}),
+			Attestations: attestations,
 		}},
 	})
 	NewWithT(t).Expect(err).ToNot(HaveOccurred())
 	return step
 }
 
+func signatureBy(v apiv1.CosignVerifier) apiv1.CosignSignature {
+	return apiv1.CosignSignature{CosignVerifier: v}
+}
+
+var attestationIdentities = []apiv1.OIDCIdentity{{Issuer: "att-issuer", Subject: "att-subject"}}
+
+func spdxAttestation() apiv1.CosignAttestation {
+	return apiv1.CosignAttestation{Type: "spdx", CosignVerifier: apiv1.CosignVerifier{MatchOIDCIdentity: attestationIdentities}}
+}
+
 func TestCosignStep_VerifiesAttestationsAfterTheSignature(t *testing.T) {
 	g := NewWithT(t)
 	verifier := &fakeCosignVerifier{
-		info:           &oci.VerificationInfo{Provider: apiv1.VerifyProviderCosign, Digest: "sha256:abc"},
-		attestationOut: []string{"https://spdx.dev/Document"},
+		info: &oci.VerificationInfo{Provider: apiv1.VerifyProviderCosign, Digest: "sha256:abc"},
 	}
-	step := attestationStep(t, verifier, "spdx")
+	step := attestationStep(t, verifier, spdxAttestation())
 
 	outcome, err := runSingleUnit(step, Input{Source: "ghcr.io/example/image", Digest: "sha256:abc"})
 
 	g.Expect(err).ToNot(HaveOccurred())
 	g.Expect(verifier.attestationCalls).To(Equal(1))
 	g.Expect(verifier.attestationRef).To(Equal("ghcr.io/example/image@sha256:abc"))
-	g.Expect(verifier.attestationTypes).To(Equal([]string{"spdx"}))
-	g.Expect(verifier.attestationIDs).To(Equal([]apiv1.OIDCIdentity{{Issuer: "issuer", Subject: "subject"}}))
+	g.Expect(verifier.attestationLog).To(Equal([]attestationCall{{
+		ref:           "ghcr.io/example/image@sha256:abc",
+		predicateType: "https://spdx.dev/Document",
+		trust:         oci.AttestationTrust{Identities: attestationIdentities},
+	}}), "an attestation is verified with its own identities, not the signature's")
 	g.Expect(outcome.Verdict).To(Equal(apiv1.StepVerdictAllow))
 	g.Expect(outcome.Cosign.Attestations).To(Equal([]string{"https://spdx.dev/Document"}))
 }
@@ -292,7 +308,7 @@ func TestCosignStep_MissingAttestationDenies(t *testing.T) {
 		info:           &oci.VerificationInfo{Provider: apiv1.VerifyProviderCosign, Digest: "sha256:abc"},
 		attestationErr: oci.NewSignatureRejectedError(errors.New("no verified attestation of type https://spdx.dev/Document")),
 	}
-	step := attestationStep(t, verifier, "spdx")
+	step := attestationStep(t, verifier, spdxAttestation())
 
 	outcome, err := runSingleUnit(step, Input{Source: "ghcr.io/example/image", Digest: "sha256:abc"})
 
@@ -307,7 +323,7 @@ func TestCosignStep_AttestationInfrastructureErrorIsAnError(t *testing.T) {
 		info:           &oci.VerificationInfo{Provider: apiv1.VerifyProviderCosign, Digest: "sha256:abc"},
 		attestationErr: errors.New("registry unavailable"),
 	}
-	step := attestationStep(t, verifier, "spdx")
+	step := attestationStep(t, verifier, spdxAttestation())
 
 	_, err := runSingleUnit(step, Input{Source: "ghcr.io/example/image", Digest: "sha256:abc"})
 
@@ -317,7 +333,7 @@ func TestCosignStep_AttestationInfrastructureErrorIsAnError(t *testing.T) {
 func TestCosignStep_RejectedSignatureSkipsTheAttestationCheck(t *testing.T) {
 	g := NewWithT(t)
 	verifier := &fakeCosignVerifier{err: oci.NewSignatureRejectedError(errors.New("no matching signature"))}
-	step := attestationStep(t, verifier, "spdx")
+	step := attestationStep(t, verifier, spdxAttestation())
 
 	outcome, err := runSingleUnit(step, Input{Source: "ghcr.io/example/image", Digest: "sha256:abc"})
 
@@ -343,8 +359,7 @@ func TestCosignStep_VerifiesWithPublicKey(t *testing.T) {
 		Name:     "signature",
 		Provider: apiv1.HookProviderCosign,
 		Cosign: &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{
-			PublicKey: testPublicKeyPEM,
-			MinAge:    minAge,
+			Signature: apiv1.CosignSignature{CosignVerifier: apiv1.CosignVerifier{PublicKey: testPublicKeyPEM}, MinAge: minAge},
 		}},
 	})
 	g.Expect(err).ToNot(HaveOccurred())
@@ -367,7 +382,65 @@ func TestCosignStep_RejectsAnInvalidPublicKey(t *testing.T) {
 	_, err := CosignBuilder(&fakeCosignVerifier{})(apiv1.HookStep{
 		Name:     "signature",
 		Provider: apiv1.HookProviderCosign,
-		Cosign:   &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{PublicKey: "not a key"}},
+		Cosign:   &apiv1.CosignHookConfig{Index: &apiv1.CosignPolicy{Signature: signatureBy(apiv1.CosignVerifier{PublicKey: "not a key"})}},
 	})
 	g.Expect(err).To(HaveOccurred())
+}
+
+func TestCosignStep_VerifiesAKeyBasedAttestationWithItsKey(t *testing.T) {
+	g := NewWithT(t)
+	verifier := &fakeCosignVerifier{info: &oci.VerificationInfo{Provider: apiv1.VerifyProviderCosign, Digest: "sha256:abc"}}
+	step := attestationStep(t, verifier,
+		apiv1.CosignAttestation{Type: "spdx", CosignVerifier: apiv1.CosignVerifier{PublicKey: testPublicKeyPEM}})
+
+	outcome, err := runSingleUnit(step, Input{Source: "ghcr.io/example/image", Digest: "sha256:abc"})
+
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(outcome.Verdict).To(Equal(apiv1.StepVerdictAllow))
+	g.Expect(verifier.attestationLog).To(Equal([]attestationCall{{
+		ref:           "ghcr.io/example/image@sha256:abc",
+		predicateType: "https://spdx.dev/Document",
+		trust:         oci.AttestationTrust{PublicKeyPEM: testPublicKeyPEM},
+	}}))
+}
+
+func TestCosignStep_EveryAttestationIsVerifiedAndOneMissingDenies(t *testing.T) {
+	g := NewWithT(t)
+	verifier := &fakeCosignVerifier{info: &oci.VerificationInfo{Provider: apiv1.VerifyProviderCosign, Digest: "sha256:abc"}}
+	step := attestationStep(t, verifier, spdxAttestation(), apiv1.CosignAttestation{
+		Type: "slsa-provenance", CosignVerifier: apiv1.CosignVerifier{MatchOIDCIdentity: attestationIdentities},
+	})
+
+	outcome, err := runSingleUnit(step, Input{Source: "ghcr.io/example/image", Digest: "sha256:abc"})
+
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(outcome.Cosign.Attestations).To(Equal([]string{"https://spdx.dev/Document", "https://slsa.dev/provenance/v1"}))
+	g.Expect(verifier.attestationCalls).To(Equal(2))
+}
+
+func TestMemoizeAttestationsReadsOnceAndDoesNotKeepAFailure(t *testing.T) {
+	g := NewWithT(t)
+	repo, err := name.NewRepository("ghcr.io/example/image")
+	g.Expect(err).ToNot(HaveOccurred())
+	digest, err := v1.NewHash("sha256:" + strings.Repeat("a", 64))
+	g.Expect(err).ToNot(HaveOccurred())
+	calls := 0
+	failFirst := true
+	discover := memoizeAttestations(func(name.Repository, v1.Hash, ...remote.Option) ([]verify.SignedEntity, error) {
+		calls++
+		if failFirst {
+			failFirst = false
+			return nil, errors.New("registry unavailable")
+		}
+		return nil, nil
+	})
+
+	_, err = discover(repo, digest)
+	g.Expect(err).To(HaveOccurred())
+	_, err = discover(repo, digest)
+	g.Expect(err).ToNot(HaveOccurred())
+	_, err = discover(repo, digest)
+	g.Expect(err).ToNot(HaveOccurred())
+
+	g.Expect(calls).To(Equal(2))
 }

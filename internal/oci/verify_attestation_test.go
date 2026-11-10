@@ -58,6 +58,14 @@ func attest(t *testing.T, sigstore *ca.VirtualSigstore, identity, predicateType 
 	return entity
 }
 
+// identityPolicy is the keyless policy for testIdentities.
+func identityPolicy(t *testing.T) []verify.PolicyOption {
+	t.Helper()
+	options, err := certificateIdentityOptions(testIdentities)
+	NewWithT(t).Expect(err).ToNot(HaveOccurred())
+	return options
+}
+
 // virtualSigstoreOptions are the production checks minus the signed certificate
 // timestamp, which the virtual sigstore's certificates do not carry.
 var virtualSigstoreOptions = []verify.VerifierOption{
@@ -75,7 +83,7 @@ func TestAttestationVerifierOptions(t *testing.T) {
 	// certificate without one is rejected.
 	_, err = verifyAttestationEntities(sigstore, digest,
 		[]verify.SignedEntity{attest(t, sigstore, testIdentity, spdxType, digest)},
-		testIdentities, []string{"spdx"}, attestationVerifierOptions())
+		[]string{"spdx"}, identityPolicy(t), attestationVerifierOptions())
 
 	g.Expect(err).To(MatchError(ContainSubstring("signed certificate timestamp")))
 }
@@ -147,7 +155,7 @@ func TestVerifyAttestationEntities(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := NewWithT(t)
 
-			got, err := verifyAttestationEntities(sigstore, digest, tt.entities, testIdentities, tt.required, virtualSigstoreOptions)
+			got, err := verifyAttestationEntities(sigstore, digest, tt.entities, tt.required, identityPolicy(t), virtualSigstoreOptions)
 
 			if tt.wantErr != "" {
 				g.Expect(err).To(HaveOccurred())
@@ -167,7 +175,7 @@ func TestVerifyAttestationEntitiesRejectsAnInvalidEntry(t *testing.T) {
 	sigstore, err := ca.NewVirtualSigstore()
 	g.Expect(err).ToNot(HaveOccurred())
 
-	_, err = verifyAttestationEntities(sigstore, testDigest(t, "a"), nil, testIdentities, []string{"not-a-type"}, virtualSigstoreOptions)
+	_, err = verifyAttestationEntities(sigstore, testDigest(t, "a"), nil, []string{"not-a-type"}, identityPolicy(t), virtualSigstoreOptions)
 
 	g.Expect(err).To(MatchError(ContainSubstring(`attestation "not-a-type" is not a predicate type`)))
 }

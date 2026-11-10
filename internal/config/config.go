@@ -675,40 +675,33 @@ func validateCosignHook(c apiv1.CosignHookConfig) error {
 }
 
 func validateCosignPolicy(p apiv1.CosignPolicy) error {
-	if p.PublicKey != "" {
-		return validateCosignKeyPolicy(p)
+	if err := validateCosignVerifier(p.Signature.CosignVerifier); err != nil {
+		return fmt.Errorf("signature: %w", err)
 	}
-	if len(p.MatchOIDCIdentity) == 0 {
-		return fmt.Errorf("one of matchOIDCIdentity and publicKey is required")
-	}
-	verification := apiv1.ArtifactVerification{
-		Provider:          apiv1.VerifyProviderCosign,
-		MatchOIDCIdentity: p.MatchOIDCIdentity,
-		MinAge:            p.MinAge,
-	}
-	if err := validateVerification(verification); err != nil {
-		return err
+	if p.Signature.MinAge != nil && p.Signature.MinAge.Duration < 0 {
+		return fmt.Errorf("signature: minAge must be >= 0")
 	}
 	return validateAttestations(p.Attestations)
 }
 
-// validateCosignKeyPolicy checks a key-based policy: the key must parse, and
-// keyless identities and attestations (which are verified against identities)
-// cannot be combined with it.
-func validateCosignKeyPolicy(p apiv1.CosignPolicy) error {
-	if len(p.MatchOIDCIdentity) > 0 {
+// validateCosignVerifier requires exactly one of keyless identities and a
+// public key, and checks the one that is set.
+func validateCosignVerifier(v apiv1.CosignVerifier) error {
+	switch {
+	case v.PublicKey != "" && len(v.MatchOIDCIdentity) > 0:
 		return fmt.Errorf("publicKey and matchOIDCIdentity are mutually exclusive")
+	case v.PublicKey != "":
+		if _, err := oci.ParsePublicKeyPEM(v.PublicKey); err != nil {
+			return fmt.Errorf("publicKey: %w", err)
+		}
+		return nil
+	case len(v.MatchOIDCIdentity) == 0:
+		return fmt.Errorf("one of matchOIDCIdentity and publicKey is required")
 	}
-	if len(p.Attestations) > 0 {
-		return fmt.Errorf("attestations are not supported with publicKey")
-	}
-	if p.MinAge != nil && p.MinAge.Duration < 0 {
-		return fmt.Errorf("minAge must be >= 0")
-	}
-	if _, err := oci.ParsePublicKeyPEM(p.PublicKey); err != nil {
-		return fmt.Errorf("publicKey: %w", err)
-	}
-	return nil
+	return validateVerification(apiv1.ArtifactVerification{
+		Provider:          apiv1.VerifyProviderCosign,
+		MatchOIDCIdentity: v.MatchOIDCIdentity,
+	})
 }
 
 func validatePlatforms(platforms []string) error {
@@ -728,20 +721,24 @@ func validatePlatforms(platforms []string) error {
 	return nil
 }
 
-// validateAttestations requires each entry to be a known alias or a predicate
-// type URI, and rejects two entries that resolve to the same predicate type.
-func validateAttestations(entries []string) error {
+// validateAttestations requires each entry to name a known alias or a
+// predicate type URI and its own verifier, and rejects two entries that
+// resolve to the same predicate type.
+func validateAttestations(entries []apiv1.CosignAttestation) error {
 	seen := make(map[string]string, len(entries))
 	for i, entry := range entries {
-		predicateType, ok := apiv1.EffectivePredicateType(entry)
+		predicateType, ok := apiv1.EffectivePredicateType(entry.Type)
 		if !ok {
-			return fmt.Errorf("attestations[%d] %q must be one of %s or a predicate type URI",
-				i, entry, strings.Join(apiv1.PredicateTypeAliases(), ", "))
+			return fmt.Errorf("attestations[%d].type %q must be one of %s or a predicate type URI",
+				i, entry.Type, strings.Join(apiv1.PredicateTypeAliases(), ", "))
 		}
 		if first, dup := seen[predicateType]; dup {
-			return fmt.Errorf("attestations[%d] %q is duplicated by %q", i, entry, first)
+			return fmt.Errorf("attestations[%d].type %q is duplicated by %q", i, entry.Type, first)
 		}
-		seen[predicateType] = entry
+		seen[predicateType] = entry.Type
+		if err := validateCosignVerifier(entry.CosignVerifier); err != nil {
+			return fmt.Errorf("attestations[%d]: %w", i, err)
+		}
 	}
 	return nil
 }

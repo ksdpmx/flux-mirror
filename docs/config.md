@@ -291,20 +291,23 @@ configuration block named after that provider; a missing or misplaced block is
 rejected. An entry cannot combine `verify:` and `hooks.pre`, because that would
 verify each tag twice.
 
-A `cosign` step has two independent parts. Discovery finds where the signature
-is stored, and verification decides what to trust. Discovery tries the OCI 1.1
-referrers API first and falls back to cosign's legacy `sha256-<digest>.sig` tag,
-so both storage layouts work with either kind of policy. The policy picks the
-verification: `matchOIDCIdentity` is keyless (a Fulcio certificate identity) and
-`publicKey` is key-based. A signature of the other kind is denied.
+A `cosign` step has two independent parts. Discovery finds where a signature or
+an attestation is stored, and verification decides what to trust. A signature is
+discovered through the OCI 1.1 referrers API first, falling back to cosign's
+legacy `sha256-<digest>.sig` tag, so both storage layouts work with either kind of
+trust. The trust is set in the config: `matchOIDCIdentity` is keyless (a Fulcio
+certificate identity) and `publicKey` is key-based. A signature of the other kind
+is denied.
 
 | Signature stored in | Keyless (`matchOIDCIdentity`) | Key-based (`publicKey`) |
 |---|---|---|
 | OCI referrers | supported | supported |
 | legacy `.sig` tag | supported | supported |
 
-Attestations are narrower: they are read only from the `.att` tag and verified
-only keyless. See `attestations` below.
+| Attestation stored in | Keyless (`matchOIDCIdentity`) | Key-based (`publicKey`) |
+|---|---|---|
+| OCI referrers | not supported | not supported |
+| legacy `.att` tag | supported | supported |
 
 A `cosign` step says which digests to verify and how, in two optional blocks of
 which at least one is required:
@@ -317,38 +320,42 @@ which at least one is required:
   variant of it. A platform that is not in the image index, or a tag that is not
   an index, is an error handled by `.onError`.
 
-Each block has its own policy, so the index and the platforms can differ:
+Each block has its own policy, so the index and the platforms can differ. A
+policy has a required `signature` and optional `attestations`, and each of them
+names its own trust in full; nothing is inherited from the signature.
 
-- `matchOIDCIdentity` (keyless) or `publicKey` (key-based) is required, and they
-  are mutually exclusive. `matchOIDCIdentity` uses the same issuer and
-  subject-regexp rules as [`verify`](#signature-verification).
-- `publicKey` is an inline PEM public key (ECDSA, RSA or Ed25519) that must have
-  made the signature, for artifacts signed with `cosign sign --key`. The
-  signature must also be in a transparency log (the Rekor bundle cosign stores
-  with it). The key is never taken from the signature, so obtain it from the
-  publisher, not from the registry. A keyless policy rejects a key-based
-  signature and the other way round. `attestations` is not supported with
-  `publicKey`. The report carries the key's SHA-256 fingerprint as `key`, and no
-  `issuer` or `identity`.
-- `minAge` is an optional duration that defers valid signatures until their
-  verified Rekor integrated time is old enough; too-new signatures yield
+- `signature` is the signature to verify, always checked first. It needs exactly
+  one of:
+  - `matchOIDCIdentity`, a list of Fulcio certificate identities with the same
+    issuer and subject-regexp rules as [`verify`](#signature-verification).
+  - `publicKey`, an inline PEM public key (ECDSA, RSA or Ed25519) that must have
+    made the signature, for artifacts signed with `cosign sign --key`. The
+    signature must also be in a transparency log (the Rekor bundle cosign stores
+    with it). The key is never taken from the signature, so obtain it from the
+    publisher, not from the registry. The report carries the key's SHA-256
+    fingerprint as `key`, and no `issuer` or `identity`.
+
+  `signature.minAge` is an optional duration that defers valid signatures until
+  their verified Rekor integrated time is old enough; too-new signatures yield
   `skipped` with reason `signature-too-new`. A signature without a verified Tlog
-  timestamp fails when `minAge` is configured.
+  timestamp fails when `minAge` is configured. It applies to the signature only.
 - `attestations` is an optional list of attestations that must be attached to the
-  digest, each signed by one of that block's `matchOIDCIdentity` (keyless only). An entry is a
-  short alias, `spdx` (`https://spdx.dev/Document`), `slsa-provenance`
+  digest. Each entry has a `type` and its own `matchOIDCIdentity` or `publicKey`,
+  with the rules of `signature`. The attestation signer is often not the image
+  signer (for example the SLSA generator), which is why it is set per entry; when
+  they are the same, write the identity once and reuse it with a YAML anchor. A
+  `type` is a short alias, `spdx` (`https://spdx.dev/Document`), `slsa-provenance`
   (`https://slsa.dev/provenance/v1`) or `cyclonedx` (`https://cyclonedx.org/bom`),
-  or a full predicate type URI such as `https://apko.dev/image-configuration`;
-  two entries that mean the same type are rejected. The check runs after the
-  signature check and denies the tag when a listed type is missing or does not
-  verify. The predicate type is read from the verified in-toto statement, which
-  must be about the digest being verified, and not from the registry's
-  annotations, which are not signed. Attestations are read from cosign's
-  `sha256-<digest>.att` tag of that digest, and an `.att` layer that cannot be
-  read counts as missing. Only the listed types are checked: other attestations
-  attached to the image are neither required nor verified, and `minAge` applies to
-  the signature only. Attestations are not discovered through the referrers API
-  yet.
+  or a full predicate type URI such as `https://slsa.dev/provenance/v0.2` or
+  `https://apko.dev/image-configuration`; two entries that mean the same type are
+  rejected. The check runs after the signature check and denies the tag when a
+  listed type is missing or does not verify. The predicate type is read from the
+  verified in-toto statement, which must be about the digest being verified, and
+  not from the registry's annotations, which are not signed. Attestations are
+  read from cosign's `sha256-<digest>.att` tag of that digest, and an `.att` layer
+  that cannot be read counts as missing. Only the listed types are checked: other
+  attestations attached to the image are neither required nor verified.
+  Attestations are not discovered through the referrers API yet.
 
 The work units of a `cosign` step are one for `index` and one per platform, so
 `concurrency` and `retries` count them and the report lists each under
@@ -398,17 +405,22 @@ artifacts:
           provider: cosign
           cosign:
             index:
-              minAge: 12h
-              matchOIDCIdentity:
-                - issuer: https://token.actions.githubusercontent.com
-                  subject: ^https://github\.com/example/image/.*$
-              attestations: [slsa-provenance]
+              signature:
+                minAge: 12h
+                matchOIDCIdentity:
+                  - issuer: https://token.actions.githubusercontent.com
+                    subject: ^https://github\.com/example/image/.*$
+              attestations:
+                - type: slsa-provenance
+                  matchOIDCIdentity:
+                    - issuer: https://token.actions.githubusercontent.com
+                      subject: ^https://github\.com/slsa-framework/slsa-github-generator/.*$
             platform:
               platforms: [linux/amd64, linux/arm64]
-              matchOIDCIdentity:
-                - issuer: https://token.actions.githubusercontent.com
-                  subject: ^https://github\.com/example/image/.*$
-              attestations: [spdx]
+              signature:
+                matchOIDCIdentity:
+                  - issuer: https://token.actions.githubusercontent.com
+                    subject: ^https://github\.com/example/image/.*$
         - name: vuln-scan
           provider: wizcli
           timeout: 10m
@@ -432,11 +444,12 @@ artifacts:
           provider: cosign
           cosign:
             index:
-              publicKey: |
-                -----BEGIN PUBLIC KEY-----
-                MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAENQlf6X0DsdsOYZGCbV83JVKne7Kp
-                3XwxwGj+rHJLUPTBAbXA+vL+eZcDiFkoGbrXMsHkYR5PW7xmClX3557D5A==
-                -----END PUBLIC KEY-----
+              signature:
+                publicKey: |
+                  -----BEGIN PUBLIC KEY-----
+                  MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAENQlf6X0DsdsOYZGCbV83JVKne7Kp
+                  3XwxwGj+rHJLUPTBAbXA+vL+eZcDiFkoGbrXMsHkYR5PW7xmClX3557D5A==
+                  -----END PUBLIC KEY-----
 ```
 
 ##### Wiz CLI scans
@@ -1047,9 +1060,9 @@ first mirrored. Referrers that exist with a different digest are skipped
 | `artifacts[].destinationType`        | `oci`      |
 | `artifacts[].verify`                 | unset      |
 | `artifacts[].hooks`                  | unset      |
-| `artifacts[].hooks.pre[].cosign.index.minAge` | unset |
+| `artifacts[].hooks.pre[].cosign.index.signature.minAge` | unset |
 | `artifacts[].hooks.pre[].cosign.index.attestations` | unset |
-| `artifacts[].hooks.pre[].cosign.platform.minAge` | unset |
+| `artifacts[].hooks.pre[].cosign.platform.signature.minAge` | unset |
 | `artifacts[].hooks.pre[].cosign.platform.attestations` | unset |
 | `artifacts[].hooks.pre[].timeout`    | `--timeout` |
 | `artifacts[].hooks.pre[].concurrency` | `1`       |
