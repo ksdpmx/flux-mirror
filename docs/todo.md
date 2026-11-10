@@ -693,44 +693,22 @@ scans a directory; both accept `--policies`, `--projects`, `--timeout`,
   - Verified: the CronJob runs in Kubernetes with the Linux binary, which
     covers the alpine run, the Wiz egress and memory use. Still open: the
     `AUDIT`-only verdict (S1).
-- **S18. The `cosign` step verified signatures only, not attestations
-  (tag path done; referrers and per-platform open).** Both discovery paths look
-  for a signature and nothing else:
-  - Referrers (`cosign_discovery.go`): only a sigstore bundle, that is a
-    referrer whose media type starts with `application/vnd.dev.sigstore.bundle`
-    and is version `v0.3` or later.
-  - Tag discovery (`cosign_tag_discovery.go`): only `sha256-<digest>.sig`, with
-    layer media type `application/vnd.dev.cosign.simplesigning.v1+json`, and it
-    needs a certificate (keyless). `sha256-<digest>.att` is never read.
-  - So an SBOM, a SLSA provenance or any other attestation is neither required
-    nor checked, even when it exists or was tampered with. `includeReferrers`
-    only copies those referrers as they are. `matchOIDCIdentity` limits who
-    signed the image, not what is attached to it.
-  - Documented in `docs/config.md` (the `cosign` step): only the listed
-    attestation types are checked, and only through the `.att` tag.
-  - **Risk to verify: the referrers path takes the first sigstore bundle,
-    whatever it holds.** `findReferrerSigstoreBundle` returns the first referrer
-    with a single layer whose media type starts with
-    `application/vnd.dev.sigstore.bundle`, and verification uses only that one.
-    An attestation published as a bundle (a DSSE envelope with an in-toto
-    statement) has the same media type as a signature bundle, so it is a
-    candidate too. Possible effects, from reading the code and not yet tested:
-    the result depends on the order of the referrers; an attestation that comes
-    first and fails the identity or digest check denies the tag even though a
-    valid signature bundle follows; and an attestation signed by a trusted
-    identity for the same digest can pass as if it were the signature. To check
-    first: list the referrers of a real `cgr.dev` image, count the bundles and
-    look at their order and content type. If confirmed, accept only a bundle
-    whose content is a message signature (skip DSSE attestations) and try every
-    candidate before denying, with a test for each order. The tag path is not
-    affected, because it reads one fixed tag.
-  - If attestation checks are wanted: decide the shape first, for example a
-    `requireAttestations` list of predicate types (`slsaprovenance`, `spdx`,
-    `cyclonedx`, `vuln`) verified against the same `matchOIDCIdentity`, found
-    through referrers and the `.att` tag; whether a missing attestation denies or
-    only warns (`onFailure`); and, per platform, the work units (S5).
-    Chainguard publishes both signatures and attestations, so check a real
-    `cgr.dev` image first.
+- **S18. Cosign attestation verification (implemented).** The original
+  signature-only gap is closed for legacy tag and OCI-referrer storage, and
+  keyless/key-based policies, at the artifact digest and each configured
+  platform digest.
+  - Referrer discovery selects DSSE bundles by the requested predicate type;
+    `https://sigstore.dev/cosign/sign/v1` is classified as a signature, not an
+    attestation. If no referrer candidate has the requested type, discovery
+    falls back to the legacy `.att` tag. A candidate of the requested type that
+    fails verification does not trigger tag fallback.
+  - `includeReferrers` copies referrers as they are; it is separate from the
+    verification performed by `cosign.signature` and `cosign.attestations`.
+    Predicate type and subject digest come from the verified statement, not
+    registry annotations.
+  - Tests cover referrer-vs-tag selection, fallback per predicate type,
+    no-downgrade after a matching referrer is found, DSSE signature
+    classification, and discovery against distinct artifact/platform digests.
   - **Spike result for the tag path (2026-11-09, `cgr.dev/chainguard/static`,
     sigstore-go 1.3.0): attestations can be verified.**
     - Layout of a multi-arch image: the index and each platform manifest have
@@ -819,13 +797,40 @@ scans a directory; both accept `--policies`, `--projects`, `--timeout`,
 - **S20. Gaps in `cosign` discovery and verification (not planned).** What is not
   built, from the matrix of discovery (referrers, legacy tag) by verification
   (keyless, key) for signatures and attestations:
-  - **Attestations through referrers: not supported** (keyless and key). cosign
-    v3 `attest` stores attestations as referrer bundles with a DSSE envelope, so
-    this is a real gap once publishers upgrade. Only the legacy `.att` tag is read.
-  - **The first-bundle risk in S18** (referrers take the first sigstore bundle,
-    whatever type) and the same for tag discovery: `.sig` takes the first
-    simplesigning layer, so a co-signed image is checked against one signer only
-    and can be denied wrongly.
+  - **Implemented: attestation referrers** (keyless and key). For each requested
+    predicate type, discovery scans Sigstore OCI referrers for DSSE attestation
+    bundles; `cosign/sign/v1` signature bundles are excluded. If no referrer
+    candidate has the requested type, discovery falls back to the legacy `.att`
+    tag. A candidate of the requested type that fails verification does not
+    trigger fallback. Discovery receives the digest for each unit, so index and
+    platform attestations are looked up independently. Tests cover multiple
+    bundles, signature-versus-attestation classification, per-type fallback and
+    no downgrade after a matching referrer is found. The public-image search
+    below did not find a real OCI-referrer attestation for end-to-end testing.
+    - **Public-image search (2026-11-10): no confirmed OCI-referrer attestation
+      found yet, keyless or key-based.** Checked Docker Hub `library/alpine`,
+      `library/nginx` and `library/redis`; Quay `cilium/cilium:v1.20.2`,
+      `cilium/operator-generic:v1.20.2`, `jetstack/cert-manager-controller`
+      and `argoproj/argocd:v3.2.3`; GHCR `fluxcd/flux-cli:v2.10.0`,
+      `fluxcd/source-controller:v1.7.0`, `fluxcd/helm-controller:v1.4.0`,
+      `kyverno/kyverno:v1.17.1`, `aquasecurity/trivy:0.68.2` and
+      `sigstore/cosign/cosign:v3.0.5`; GCR
+      `distroless/static-debian13:nonroot` and `projectsigstore/cosign:v3.0.5`;
+      and AWS Public ECR
+      `eks-distro/kubernetes-csi/node-driver-registrar:v2.13.0-eks-1-33-9`
+      plus `livenessprobe:v2.15.0-eks-1-33-9`.
+      The referrers seen on Cilium, Trivy and Cosign were signatures
+      (`https://sigstore.dev/cosign/sign/v1`), not attestations. Flux CLI,
+      Distroless, Kyverno, Flux controllers and Argo CD had legacy `.att` tags;
+      these do not exercise referrer-att discovery. Wiz charts had key-based
+      `.sig` but no `.att`. This is a bounded sample, not proof that no public
+      example exists; Cosign's format supports publishing DSSE attestations as
+      referrers.
+  - **Multiple signatures:** referrer discovery now skips DSSE attestations and
+    selects the first signature bundle, but does not try later signature bundles
+    if verification fails. Legacy `.sig` discovery likewise takes the first
+    simplesigning layer, so a co-signed image may be denied despite a later
+    signature matching policy.
   - **One trust per signature.** `signature` is a single object, so there is no
     list of keys for rotation (accept the old and the new key), and no "any of".
     Changing it to a list later is a breaking change; decide before it is
@@ -857,8 +862,8 @@ scans a directory; both accept `--policies`, `--projects`, `--timeout`,
       would only be a consistency check and could be mistaken for a verification.
     - Notation (Notary v2) signatures and Helm `.prov` (PGP) are not supported.
   - `charts[]` has no `hooks`, so Helm charts are verified only as an OCI
-    artifact through `artifacts[]`; a chart is a single manifest, so only `index`
-    applies (`platform` is an error).
+    artifact through `artifacts[]`; a chart is a single manifest, so the
+    top-level `cosign.signature` applies and `platform` is omitted.
   - A `platform` block cannot say "all platforms"; they are listed one by one.
 - **S19. Scanning an SBOM taken from a verified attestation (not planned; wizcli
   cannot do it).** Idea: verify the SPDX or CycloneDX attestation, extract the

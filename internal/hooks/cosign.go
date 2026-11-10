@@ -226,7 +226,7 @@ func (s cosignStep) verify(ctx context.Context, ref, digest string, policy cosig
 	}
 
 	verification := cosignVerification(info, nil, sig)
-	// The .att tag is read once for all the attestations of this digest.
+	// Discovery is memoized per digest and predicate type.
 	discover := memoizeAttestations(discoverCosignAttestations)
 	for _, att := range policy.attestations {
 		predicateType, err := s.verifier.VerifyAttestation(ctx, ref, att.predicateType, oci.AttestationTrust{
@@ -249,26 +249,26 @@ func (s cosignStep) verify(ctx context.Context, ref, digest string, policy cosig
 	}, nil
 }
 
-// memoizeAttestations wraps discover so that the attestations of a digest are
-// read once, however many attestation policies are checked against them. A
-// failure is not kept.
+// memoizeAttestations wraps discover so a digest and predicate type are
+// discovered once across units/retries. A failure is not kept.
 func memoizeAttestations(discover oci.AttestationDiscoverer) oci.AttestationDiscoverer {
 	type key struct {
-		repo   string
-		digest string
+		repo          string
+		digest        string
+		predicateType string
 	}
 	var (
 		mu    sync.Mutex
 		cache = map[key][]verify.SignedEntity{}
 	)
-	return func(repo name.Repository, digest v1.Hash, opts ...remote.Option) ([]verify.SignedEntity, error) {
-		k := key{repo: repo.String(), digest: digest.String()}
+	return func(repo name.Repository, digest v1.Hash, predicateType string, opts ...remote.Option) ([]verify.SignedEntity, error) {
+		k := key{repo: repo.String(), digest: digest.String(), predicateType: predicateType}
 		mu.Lock()
 		defer mu.Unlock()
 		if entities, ok := cache[k]; ok {
 			return entities, nil
 		}
-		entities, err := discover(repo, digest, opts...)
+		entities, err := discover(repo, digest, predicateType, opts...)
 		if err != nil {
 			return nil, err
 		}

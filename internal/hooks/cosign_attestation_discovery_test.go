@@ -119,7 +119,7 @@ func discoverAttestations(t *testing.T, stem string, push func(t testing.TB, rep
 
 	repoName, err := name.NewRepository(repoAddr, name.Insecure)
 	g.Expect(err).ToNot(HaveOccurred())
-	entities, err := discoverCosignAttestations(repoName, digest)
+	entities, err := discoverCosignAttestations(repoName, digest, "https://spdx.dev/Document")
 	g.Expect(err).ToNot(HaveOccurred())
 	return len(entities)
 }
@@ -171,4 +171,95 @@ func TestDiscoverCosignAttestations(t *testing.T) {
 		})
 		g.Expect(count).To(BeZero())
 	})
+}
+
+func TestDiscoverCosignAttestationReferrersByRequestedType(t *testing.T) {
+	g := NewWithT(t)
+	repoAddr := repo("cosign-att-referrer-preferred")
+	digest, err := v1.NewHash(testregistry.PushImage(t, repoAddr+":v1"))
+	g.Expect(err).ToNot(HaveOccurred())
+
+	pushCosignAttestations(t, repoAddr, digest, newAttestationLayer(t, "https://slsa.dev/provenance/v1"))
+	attestationBytes, mediaType := testReferrerAttestationBundle(t, digest, "https://spdx.dev/Document")
+	pushReferrerBundle(t, repoAddr, digest, attestationBytes, mediaType)
+
+	repoName, err := name.NewRepository(repoAddr, name.Insecure)
+	g.Expect(err).ToNot(HaveOccurred())
+	entities, err := discoverCosignAttestations(repoName, digest, "https://spdx.dev/Document")
+
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(entities).To(HaveLen(1), "the matching referrer is preferred over a legacy tag")
+	content, err := entities[0].SignatureContent()
+	g.Expect(err).ToNot(HaveOccurred())
+	statement, err := content.EnvelopeContent().Statement()
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(statement.PredicateType).To(Equal("https://spdx.dev/Document"))
+}
+
+func TestDiscoverCosignAttestationFallsBackWhenReferrersHaveAnotherType(t *testing.T) {
+	g := NewWithT(t)
+	repoAddr := repo("cosign-att-referrer-fallback")
+	digest, err := v1.NewHash(testregistry.PushImage(t, repoAddr+":v1"))
+	g.Expect(err).ToNot(HaveOccurred())
+
+	attestationBytes, mediaType := testReferrerAttestationBundle(t, digest, "https://slsa.dev/provenance/v1")
+	pushReferrerBundle(t, repoAddr, digest, attestationBytes, mediaType)
+	pushCosignAttestations(t, repoAddr, digest, newAttestationLayer(t, "https://spdx.dev/Document"))
+
+	repoName, err := name.NewRepository(repoAddr, name.Insecure)
+	g.Expect(err).ToNot(HaveOccurred())
+	entities, err := discoverCosignAttestations(repoName, digest, "https://spdx.dev/Document")
+
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(entities).To(HaveLen(1), "a referrer of another type does not suppress tag fallback")
+	content, err := entities[0].SignatureContent()
+	g.Expect(err).ToNot(HaveOccurred())
+	statement, err := content.EnvelopeContent().Statement()
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(statement.PredicateType).To(Equal("https://spdx.dev/Document"))
+}
+
+func TestDiscoverCosignAttestationDoesNotFallbackAfterMatchingReferrerFound(t *testing.T) {
+	g := NewWithT(t)
+	repoAddr := repo("cosign-att-referrer-no-downgrade")
+	digest, err := v1.NewHash(testregistry.PushImage(t, repoAddr+":v1"))
+	g.Expect(err).ToNot(HaveOccurred())
+
+	attestationBytes, mediaType := testReferrerAttestationBundle(t, digest, "https://spdx.dev/Document")
+	pushReferrerBundle(t, repoAddr, digest, attestationBytes, mediaType)
+	pushCosignAttestations(t, repoAddr, digest, newAttestationLayer(t, "https://spdx.dev/Document"))
+
+	repoName, err := name.NewRepository(repoAddr, name.Insecure)
+	g.Expect(err).ToNot(HaveOccurred())
+	entities, err := discoverCosignAttestations(repoName, digest, "https://spdx.dev/Document")
+
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(entities).To(HaveLen(1), "a matching referrer is not masked by a legacy tag")
+}
+
+func TestDiscoverCosignAttestationsUsesTheRequestedDigest(t *testing.T) {
+	g := NewWithT(t)
+	repoAddr := repo("cosign-att-referrer-platform-digests")
+	artifactDigest, err := v1.NewHash(testregistry.PushImage(t, repoAddr+":artifact"))
+	g.Expect(err).ToNot(HaveOccurred())
+	platformDigest, err := v1.NewHash(testregistry.PushImage(t, repoAddr+":platform"))
+	g.Expect(err).ToNot(HaveOccurred())
+	pushReferrerBundleForPredicate(t, repoAddr, artifactDigest, "https://slsa.dev/provenance/v1")
+	pushReferrerBundleForPredicate(t, repoAddr, platformDigest, "https://spdx.dev/Document")
+	repoName, err := name.NewRepository(repoAddr, name.Insecure)
+	g.Expect(err).ToNot(HaveOccurred())
+
+	artifactAttestations, err := discoverCosignAttestations(repoName, artifactDigest, "https://slsa.dev/provenance/v1")
+	g.Expect(err).ToNot(HaveOccurred())
+	platformAttestations, err := discoverCosignAttestations(repoName, platformDigest, "https://spdx.dev/Document")
+
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(artifactAttestations).To(HaveLen(1))
+	g.Expect(platformAttestations).To(HaveLen(1))
+}
+
+func pushReferrerBundleForPredicate(t testing.TB, repoAddr string, subject v1.Hash, predicateType string) {
+	t.Helper()
+	data, mediaType := testReferrerAttestationBundle(t, subject, predicateType)
+	pushReferrerBundle(t, repoAddr, subject, data, mediaType)
 }

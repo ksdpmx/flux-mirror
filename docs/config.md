@@ -306,7 +306,7 @@ is denied.
 
 | Attestation stored in | Keyless (`matchOIDCIdentity`) | Key-based (`publicKey`) |
 |---|---|---|
-| OCI referrers | not supported | not supported |
+| OCI referrers | supported | supported |
 | legacy `.att` tag | supported | supported |
 
 A `cosign` step always verifies the digest the tag points at with
@@ -351,10 +351,13 @@ attestation also names its own trust in full; nothing is inherited.
   listed type is missing or does not verify. The predicate type is read from the
   verified in-toto statement, which must be about the digest being verified, and
   not from the registry's annotations, which are not signed. Attestations are
-  read from cosign's `sha256-<digest>.att` tag of that digest, and an `.att` layer
-  that cannot be read counts as missing. Only the listed types are checked: other
-  attestations attached to the image are neither required nor verified.
-  Attestations are not discovered through the referrers API yet.
+  discovered from OCI referrers first, by the requested predicate type, then
+  from cosign's `sha256-<digest>.att` tag if no matching referrer candidate
+  exists. A referrer candidate that matches the requested type but fails
+  verification denies the tag; it does not fall back to the tag. A matching
+  candidate is verified from its signed DSSE statement, not from its annotations.
+  Only the listed types are checked: other attestations attached to the image
+  are neither required nor verified.
 
 The work units of a `cosign` step are one for the tag's digest and one per
 platform, so `concurrency` and `retries` count them. When platform checks are

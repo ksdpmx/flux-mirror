@@ -436,7 +436,7 @@ func TestMemoizeAttestationsReadsOnceAndDoesNotKeepAFailure(t *testing.T) {
 	g.Expect(err).ToNot(HaveOccurred())
 	calls := 0
 	failFirst := true
-	discover := memoizeAttestations(func(name.Repository, v1.Hash, ...remote.Option) ([]verify.SignedEntity, error) {
+	discover := memoizeAttestations(func(name.Repository, v1.Hash, string, ...remote.Option) ([]verify.SignedEntity, error) {
 		calls++
 		if failFirst {
 			failFirst = false
@@ -445,11 +445,11 @@ func TestMemoizeAttestationsReadsOnceAndDoesNotKeepAFailure(t *testing.T) {
 		return nil, nil
 	})
 
-	_, err = discover(repo, digest)
+	_, err = discover(repo, digest, "https://spdx.dev/Document")
 	g.Expect(err).To(HaveOccurred())
-	_, err = discover(repo, digest)
+	_, err = discover(repo, digest, "https://spdx.dev/Document")
 	g.Expect(err).ToNot(HaveOccurred())
-	_, err = discover(repo, digest)
+	_, err = discover(repo, digest, "https://spdx.dev/Document")
 	g.Expect(err).ToNot(HaveOccurred())
 
 	g.Expect(calls).To(Equal(2))

@@ -47,11 +47,12 @@ func NewSignatureRejectedError(err error) *SignatureRejectedError {
 // raw artifact digest.
 type SignatureDiscoverer func(name.Repository, v1.Hash, ...remote.Option) (*bundle.Bundle, []byte, error)
 
-// AttestationDiscoverer finds the sigstore entities of the attestations
-// attached to a digest. Their predicate types are only known after they have
-// been verified, so the discoverer returns every candidate it can build and
-// leaves out what it cannot read. No attestation at all is an empty result.
-type AttestationDiscoverer func(name.Repository, v1.Hash, ...remote.Option) ([]verify.SignedEntity, error)
+// AttestationDiscoverer finds candidates for predicateType attached to a
+// digest. Discovery reads the unverified statement header only to select
+// candidates; the verifier still checks the signed statement, identity/key,
+// transparency log and subject digest. An empty result means the caller may
+// try another supported storage format.
+type AttestationDiscoverer func(name.Repository, v1.Hash, string, ...remote.Option) ([]verify.SignedEntity, error)
 
 // AttestationTrust says whom to trust for an attestation: one of the keyless
 // Identities and a PublicKeyPEM, exactly one of which is set.
@@ -92,7 +93,7 @@ func (v *Verifier) VerifyAttestation(
 	if err != nil {
 		return "", fmt.Errorf("fetch descriptor for %q: %w", ref, err)
 	}
-	entities, err := discover(parsed.Context(), desc.Digest, opts...)
+	entities, err := discover(parsed.Context(), desc.Digest, predicateType, opts...)
 	if err != nil {
 		return "", err
 	}

@@ -20,6 +20,8 @@ import (
 	protodsse "github.com/sigstore/protobuf-specs/gen/pb-go/dsse"
 	"github.com/sigstore/sigstore-go/pkg/bundle"
 	"github.com/sigstore/sigstore-go/pkg/verify"
+
+	"github.com/fluxcd/flux-mirror/internal/oci"
 )
 
 // cosignAttestationMediaType is the media type of a layer of an .att manifest:
@@ -44,14 +46,68 @@ type cosignDSSEEnvelope struct {
 	} `json:"signatures"`
 }
 
-// discoverCosignAttestations reads the .att manifest of digest and rebuilds
+// discoverCosignAttestations first looks for a referrer DSSE bundle with the
+// requested predicate type, then falls back to the legacy .att tag only when no
+// matching referrer candidate exists. A candidate that fails verification is
+// not hidden by a tag-based fallback.
+func discoverCosignAttestations(repo name.Repository, digest v1.Hash, predicateType string, opts ...remote.Option) ([]verify.SignedEntity, error) {
+	entities, found, err := findReferrerAttestations(repo, digest, predicateType, opts...)
+	if err != nil {
+		return nil, err
+	}
+	if found {
+		return entities, nil
+	}
+	return discoverCosignTagAttestations(repo, digest, opts...)
+}
+
+func findReferrerAttestations(
+	repo name.Repository,
+	digest v1.Hash,
+	predicateType string,
+	opts ...remote.Option,
+) ([]verify.SignedEntity, bool, error) {
+	bundles, err := findReferrerBundles(repo, digest, opts...)
+	if errors.Is(err, errNoReferrerBundle) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	var entities []verify.SignedEntity
+	for _, sigstoreBundle := range bundles {
+		envelope := sigstoreBundle.GetDsseEnvelope()
+		if envelope == nil {
+			continue
+		}
+		var statement struct {
+			PredicateType string `json:"predicateType"`
+		}
+		if err := json.Unmarshal(envelope.Payload, &statement); err != nil {
+			return nil, false, fmt.Errorf("read referrer DSSE predicate type: %w", err)
+		}
+		if statement.PredicateType != predicateType || statement.PredicateType == cosignSignaturePredicateType {
+			continue
+		}
+		if !sigstoreBundle.MinVersion(referrerSigstoreBundleMinVersion) {
+			return nil, false, oci.NewSignatureRejectedError(fmt.Errorf(
+				"unsupported sigstore attestation bundle version: minimum %s required",
+				referrerSigstoreBundleMinVersion,
+			))
+		}
+		entities = append(entities, sigstoreBundle)
+	}
+	return entities, len(entities) > 0, nil
+}
+
+// discoverCosignTagAttestations reads the .att manifest of digest and rebuilds
 // each DSSE layer as a sigstore bundle, so they verify like any other bundle.
 // An .att manifest has one layer per attestation, and nothing in a layer other
 // than its signature is trusted: the annotation that names the predicate type
 // is not signed, so the predicate type is read after verification. A layer
 // that cannot be read is left out; whether the attestations that remain are
 // enough is for the verifier to decide. A missing .att tag is an empty result.
-func discoverCosignAttestations(repo name.Repository, digest v1.Hash, opts ...remote.Option) ([]verify.SignedEntity, error) {
+func discoverCosignTagAttestations(repo name.Repository, digest v1.Hash, opts ...remote.Option) ([]verify.SignedEntity, error) {
 	tagRef := repo.Tag(cosignAttestationTag(digest))
 	desc, err := remote.Get(tagRef, opts...)
 	if err != nil {
