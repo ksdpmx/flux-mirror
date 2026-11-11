@@ -110,6 +110,11 @@ func writeHookLines(b *strings.Builder, steps []apiv1.StepResult) {
 			detail += ": " + reason
 		}
 		fmt.Fprintf(b, "  %s pre hook %s: %s\n", branch, step.Name, detail)
+		for _, unit := range step.Units {
+			if unit.Wizcli != nil && unit.Wizcli.ReportURL != "" {
+				fmt.Fprintf(b, "     %s report: %s\n", unit.Name, unit.Wizcli.ReportURL)
+			}
+		}
 	}
 }
 

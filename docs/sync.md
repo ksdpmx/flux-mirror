@@ -145,7 +145,8 @@ records them with the verdict `skip`, the reason `up-to-date` and zero attempts.
 Tags that no hook ran for (drifted, `--dry-run`, or no hooks configured) have none. A blocked tag prints the step that rejected
 it and, for `wizcli`, the policies that failed; it has no destination line
 because nothing was copied. Per-platform progress and retries are only logged
-with `--verbose`.
+with `--verbose`. When `wizcli.publish` is enabled, text output also lists each
+platform's report URL if Wiz returns one.
 
 ### Verbose mode
 
@@ -157,7 +158,8 @@ missing-blob, or push-rejection issues.
 When an entry has [`hooks.pre`](config.md#pre-copy-hooks), the log also shows
 each hook run: `hooks started`, `hook step started`/`finished`, a `hook unit
 started`/`finished` pair per work unit (for `wizcli`, one per platform, with
-the `scanId` and the `failedPolicies` of a deny), `hook attempt failed;
+the `scanId`, published `reportUrl` when available, and the `failedPolicies`
+of a deny), `hook attempt failed;
 retrying`, and `hook denied tag`. A tag spends the time between the source
 and destination comparison and `mirroring tag` in these steps, so these lines
 show whether a scan is still running.

@@ -142,22 +142,14 @@ fallback) and verifies that single signature. Known gaps:
   referrers and the tag discovery paths. `minAge` needs a verified Rekor
   integrated time, so it only applies when the bundle carries one. Until then,
   such sources must be mirrored without `verify`.
-- **V8. `charts` (HTTP/S Helm repo source) has no verification at all.**
-  `ChartEntry` has no `verify`: cosign signatures live in OCI registries, which
-  a classic Helm repo (`index.yaml` plus `.tgz`) does not have. Today
-  `helmrepo.HTTPSource.Download` also does not compare the tarball with the
-  `digest` in `index.yaml`, so not even integrity is checked; trust rests on
-  HTTPS and the source site.
-  - Integrity: verify sha256(tgz) against the `index.yaml` `digest` (skip with a
-    clear error when the index has none). Cheap; fits together with B3, which
-    also reads that digest.
-  - Authenticity: verify the Helm provenance file (`<chart>-<version>.tgz.prov`,
-    PGP) the way `helm verify` does. Needs a public keyring field in the config
-    (same shape of problem as V7's static public key) and a `.prov` download per
-    version. A `verify` block under `charts[]` would have to be designed first
-    (provider, keyring, whether a missing `.prov` fails the version).
-  - Mirroring a chart through OCI and then using `artifacts` with cosign only
-    helps when the OCI copy is signed by you.
+
+- **V8. Helm chart source index digest verification (design pending).** The
+  `.prov` authenticity check is implemented through `charts[].hooks.pre` with
+  `provider: helm`. Still open: compare the downloaded `.tgz` SHA-256 with the
+  `digest` in `index.yaml`. Decide whether this is a chart mirror integrity
+  setting or a hook, and how to handle a missing digest. A post-hook that
+  deletes a destination version on mismatch is destructive and needs an
+  explicit policy before implementation.
 
 ## Vulnerability scanning gate (to design)
 

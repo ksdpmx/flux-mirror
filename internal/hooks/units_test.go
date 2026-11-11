@@ -196,7 +196,7 @@ func TestRunner_LogsNamedUnitsAndDeny(t *testing.T) {
 		verdictUnit("linux/arm64", Outcome{
 			Verdict: apiv1.StepVerdictDeny,
 			Reason:  "policy",
-			Wizcli:  &apiv1.WizcliResult{ScanID: "scan-1", FailedPolicies: []string{"EOL", "CVE"}},
+			Wizcli:  &apiv1.WizcliResult{ScanID: "scan-1", ReportURL: "https://app.wiz.io/report/scan-1", FailedPolicies: []string{"EOL", "CVE"}},
 		}, nil),
 	}
 
@@ -209,6 +209,7 @@ func TestRunner_LogsNamedUnitsAndDeny(t *testing.T) {
 	g.Expect(strings.Count(out, `msg="hook unit started"`)).To(Equal(2))
 	g.Expect(out).To(ContainSubstring("unit=linux/arm64"))
 	g.Expect(out).To(ContainSubstring("scanId=scan-1"))
+	g.Expect(out).To(ContainSubstring("reportUrl=https://app.wiz.io/report/scan-1"))
 	g.Expect(out).To(ContainSubstring("failedPolicies=EOL,CVE"))
 	g.Expect(out).To(ContainSubstring(`msg="hook step finished"`))
 	g.Expect(out).To(ContainSubstring(`msg="hook denied tag"`))

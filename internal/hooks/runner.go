@@ -409,6 +409,9 @@ func logUnitFinished(log *slog.Logger, named bool, run unitRun) {
 		if w.ScanID != "" {
 			attrs = append(attrs, "scanId", w.ScanID)
 		}
+		if w.ReportURL != "" {
+			attrs = append(attrs, "reportUrl", w.ReportURL)
+		}
 		if len(w.FailedPolicies) > 0 {
 			attrs = append(attrs, "failedPolicies", strings.Join(w.FailedPolicies, ","))
 		}

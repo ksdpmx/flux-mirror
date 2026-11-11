@@ -310,6 +310,10 @@
                                       },
                                       "type": "array"
                                     },
+                                    "reportUrl": {
+                                      "description": "ReportURL is the URL of the published scan report, when provided by Wiz.",
+                                      "type": "string"
+                                    },
                                     "scanId": {
                                       "description": "ScanID is the Wiz scan identifier.",
                                       "type": "string"

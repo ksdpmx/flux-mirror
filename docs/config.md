@@ -437,6 +437,7 @@ artifacts:
           wizcli:
             platforms: [linux/amd64, linux/arm64]
             policies: [prod-vuln]
+            publish: true
 ```
 
 A key-based signature, such as a chart published with `cosign sign --key`
@@ -475,12 +476,15 @@ binary or the credentials are missing.
 - `.wizcli.policies` is an optional list of Wiz policy names. Without it,
   `wizcli` evaluates every policy of the account that applies to CLI scans.
 - `.wizcli.binary` is the `wizcli` executable, `wizcli` on `PATH` by default.
+- `.wizcli.publish` enables publishing scan results to the Wiz portal. It
+  defaults to `false` (`--no-publish`); set it to `true` to publish.
 
 Credentials are never part of the config. `wizcli` authenticates with the Wiz
 service account in the `WIZ_CLIENT_ID` and `WIZ_CLIENT_SECRET` environment
 variables, and both must be set. No Wiz project is passed, so the scan applies
-to all projects associated with the service account. Results are not published
-to the Wiz portal (`--no-publish`).
+to all projects associated with the service account. When publishing is enabled,
+the report URL returned by Wiz is included in text output, verbose logs, and
+structured reports if available.
 
 `wizcli` cannot read an image from a registry without a Docker daemon, so for
 each platform flux-mirror pulls the image at the digest resolved for the tag
@@ -1096,6 +1100,7 @@ first mirrored. Referrers that exist with a different digest are skipped
 | `artifacts[].hooks.pre[].onError`    | `block`    |
 | `artifacts[].hooks.pre[].wizcli.policies` | all CLI policies of the account |
 | `artifacts[].hooks.pre[].wizcli.binary` | `wizcli` |
+| `artifacts[].hooks.pre[].wizcli.publish` | `false` |
 | `charts[].destinationType`           | `oci`      |
 | `charts[].selector.sortBy`           | `semver`   |
 | `charts[].selector.limit`            | `1`        |

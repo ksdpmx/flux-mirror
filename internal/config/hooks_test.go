@@ -406,11 +406,13 @@ artifacts:
           wizcli:
             platforms: [linux/amd64, linux/arm64]
             policies: [prod-vuln]
+            publish: true
 `
 		cfg, _, err := Decode(strings.NewReader(raw))
 		g.Expect(err).ToNot(HaveOccurred())
 		g.Expect(Validate(cfg)).To(Succeed())
 		g.Expect(cfg.Artifacts[0].Hooks.Pre[0].Wizcli.Platforms).To(Equal([]string{"linux/amd64", "linux/arm64"}))
+		g.Expect(cfg.Artifacts[0].Hooks.Pre[0].Wizcli.Publish).To(BeTrue())
 
 		_, _, err = Decode(strings.NewReader(strings.Replace(raw, "policies: [prod-vuln]", "projects: [p1]", 1)))
 		g.Expect(err).To(MatchError(ContainSubstring("unknown field")))

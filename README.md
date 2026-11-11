@@ -32,7 +32,8 @@ on upstream chart repositories.
   source artifacts before they are mirrored, with optional minimum signature age.
 - **Pre-copy gates** — ordered hooks for OCI artifacts and chart versions:
   `cosign` checks signatures and attestations, `wizcli` scans OCI images, and
-  the chart-only `helm` provider verifies PGP `.prov` provenance files.
+  the chart-only `helm` provider verifies PGP `.prov` provenance files. Wiz CLI
+  results can optionally be published to the Wiz portal.
 - **Selector pipeline** — the same four-step `regex → semver → sort → top-N`
   filter for OCI artifacts and Helm charts. Sort by `semver`, `alphabetical`, or
   `numerical`.

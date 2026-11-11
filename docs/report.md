@@ -203,6 +203,7 @@ itself is never copied because it names the user who ran the scan:
 |------------------|------------------------------------------------------------------|
 | `digest`         | Manifest digest of the scanned platform image.                   |
 | `scanId`         | Wiz scan identifier.                                             |
+| `reportUrl`      | HTTPS URL of the published Wiz report, when provided by Wiz.     |
 | `verdict`        | Wiz verdict, for example `PASSED_BY_POLICY` or `FAILED_BY_POLICY`. |
 | `failedPolicies` | Names of the policies that rejected the image.                   |
 

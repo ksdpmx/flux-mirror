@@ -33,7 +33,7 @@ if [ ! -f "$image" ]; then echo "image tarball is missing" >&2; exit 1; fi
 case "$(cat "$image")" in
   *fail-policy*)
     cat > "$out" <<EOF
-{"id":"scan-fail","status":{"state":"SUCCESS","verdict":"FAILED_BY_POLICY"},"createdBy":{"name":"someone"},"result":{"failedPolicyMatches":[{"policy":{"name":"Block End of Life"}},{"policy":{"name":"Block End of Life"}}]}}
+{"id":"scan-fail","reportUrl":"https://app.wiz.io/reports/scan-fail","status":{"state":"SUCCESS","verdict":"FAILED_BY_POLICY"},"createdBy":{"name":"someone"},"result":{"failedPolicyMatches":[{"policy":{"name":"Block End of Life"}},{"policy":{"name":"Block End of Life"}}]}}
 EOF
     exit 4 ;;
   *scan-error*)
@@ -41,7 +41,7 @@ EOF
     exit 1 ;;
   *)
     cat > "$out" <<EOF
-{"id":"scan-pass","status":{"state":"SUCCESS","verdict":"PASSED_BY_POLICY"},"createdBy":{"name":"someone"},"result":{"failedPolicyMatches":null}}
+{"id":"scan-pass","reportUrl":"https://app.wiz.io/reports/scan-pass","status":{"state":"SUCCESS","verdict":"PASSED_BY_POLICY"},"createdBy":{"name":"someone"},"result":{"failedPolicyMatches":null}}
 EOF
     exit 0 ;;
 esac
@@ -192,6 +192,24 @@ func TestWizcliStep_OneFailingPlatformBlocksTheTag(t *testing.T) {
 	g.Expect(step.Units[1].Wizcli.Verdict).To(Equal("FAILED_BY_POLICY"))
 }
 
+func TestWizcliStep_PublishReports(t *testing.T) {
+	g := NewWithT(t)
+	fake := newFakeWizcli(t)
+	saver := &fakeSaver{content: map[string]string{"linux/arm64": "fail-policy"}}
+	runner := wizcliRunner(t, fake, saver, func(step *apiv1.HookStep) {
+		step.Wizcli.Publish = true
+	})
+
+	result, err := runner.Run(context.Background(), Input{Source: "ghcr.io/example/image", Digest: "sha256:index"})
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(result.Terminal.Status).To(Equal(apiv1.StatusBlocked))
+	g.Expect(result.Steps[0].Units[0].Wizcli.ReportURL).To(Equal("https://app.wiz.io/reports/scan-pass"))
+	g.Expect(result.Steps[0].Units[1].Wizcli.ReportURL).To(Equal("https://app.wiz.io/reports/scan-fail"))
+	for _, call := range fake.calls(t) {
+		g.Expect(call).ToNot(ContainSubstring("--no-publish"))
+	}
+}
+
 func TestWizcliStep_PolicyFailureFollowsOnDeny(t *testing.T) {
 	saver := func() *fakeSaver {
 		return &fakeSaver{content: map[string]string{"linux/arm64": "fail-policy"}}
@@ -327,7 +345,7 @@ func TestInterpretWizcli(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			g := NewWithT(t)
-			outcome, err := interpretWizcli(tt.exitCode, report(t, tt.report), "sha256:child", "output")
+			outcome, err := interpretWizcli(tt.exitCode, report(t, tt.report), "sha256:child", "output", false)
 			if tt.wantErr != "" {
 				g.Expect(err).To(MatchError(ContainSubstring(tt.wantErr)))
 				return
@@ -336,6 +354,29 @@ func TestInterpretWizcli(t *testing.T) {
 			g.Expect(outcome.Verdict).To(Equal(tt.wantVerdict))
 			g.Expect(outcome.Reason).To(Equal(tt.wantReason))
 			g.Expect(outcome.Wizcli.Digest).To(Equal("sha256:child"))
+		})
+	}
+}
+
+func TestInterpretWizcliReportURL(t *testing.T) {
+	for _, tc := range []struct {
+		name, url, want string
+		publish         bool
+	}{
+		{name: "published", url: "https://app.wiz.io/report/1", want: "https://app.wiz.io/report/1", publish: true},
+		{name: "not published", url: "https://app.wiz.io/report/1"},
+		{name: "message", url: "No report was generated", publish: true},
+		{name: "non-https", url: "http://example.com/report", publish: true},
+		{name: "credentials", url: "https://user:password@example.com/report", publish: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			path := filepath.Join(t.TempDir(), "scan.json")
+			content := `{"reportUrl":"` + tc.url + `","status":{"state":"SUCCESS","verdict":"PASSED_BY_POLICY"}}`
+			g.Expect(os.WriteFile(path, []byte(content), 0o600)).To(Succeed())
+			outcome, err := interpretWizcli(0, path, "sha256:child", "", tc.publish)
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(outcome.Wizcli.ReportURL).To(Equal(tc.want))
 		})
 	}
 }

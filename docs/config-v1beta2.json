@@ -309,6 +309,10 @@
                             "type": "string"
                           },
                           "type": "array"
+                        },
+                        "publish": {
+                          "description": "Publish sends scan results to the Wiz portal. Defaults to false.",
+                          "type": "boolean"
                         }
                       },
                       "required": [
@@ -742,6 +746,10 @@
                             "type": "string"
                           },
                           "type": "array"
+                        },
+                        "publish": {
+                          "description": "Publish sends scan results to the Wiz portal. Defaults to false.",
+                          "type": "boolean"
                         }
                       },
                       "required": [

@@ -267,6 +267,10 @@ type WizcliResult struct {
 	// +optional
 	ScanID string `json:"scanId,omitempty"`
 
+	// ReportURL is the URL of the published scan report, when provided by Wiz.
+	// +optional
+	ReportURL string `json:"reportUrl,omitempty"`
+
 	// Verdict is the Wiz scan verdict, for example PASSED_BY_POLICY or
 	// FAILED_BY_POLICY.
 	// +optional

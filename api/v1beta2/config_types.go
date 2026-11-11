@@ -774,6 +774,10 @@ type WizcliHookConfig struct {
 	// Binary is the wizcli executable. Defaults to wizcli, resolved on PATH.
 	// +optional
 	Binary string `json:"binary,omitempty"`
+
+	// Publish sends scan results to the Wiz portal. Defaults to false.
+	// +optional
+	Publish bool `json:"publish,omitempty"`
 }
 
 // OIDCIdentity matches a Fulcio certificate identity.

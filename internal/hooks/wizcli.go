@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -71,6 +72,7 @@ func WizcliBuilder(saver ImageSaver) Builder {
 			binary:    path,
 			platforms: config.Wizcli.Platforms,
 			policies:  config.Wizcli.Policies,
+			publish:   config.Wizcli.Publish,
 		}, nil
 	}
 }
@@ -80,6 +82,7 @@ type wizcliStep struct {
 	binary    string
 	platforms []string
 	policies  []string
+	publish   bool
 }
 
 // Units implements Step with one unit per platform.
@@ -130,14 +133,17 @@ func (s wizcliStep) scan(ctx context.Context, input Input, platform string) (Out
 		}
 		exitCode = exitErr.ExitCode()
 	}
-	return interpretWizcli(exitCode, reportPath, digest, output.String())
+	return interpretWizcli(exitCode, reportPath, digest, output.String(), s.publish)
 }
 
 func (s wizcliStep) arguments(ctx context.Context, imagePath, reportPath string) []string {
 	args := []string{
 		"scan", "container-image", imagePath,
-		"--no-publish", "--no-color", "--no-style", "--no-telemetry",
+		"--no-color", "--no-style", "--no-telemetry",
 		"--json-output-file", reportPath,
+	}
+	if !s.publish {
+		args = append(args, "--no-publish")
 	}
 	if len(s.policies) > 0 {
 		args = append(args, "--policies", strings.Join(s.policies, ","))
@@ -153,8 +159,9 @@ func (s wizcliStep) arguments(ctx context.Context, imagePath, reportPath string)
 // wizcliScan is the part of the wizcli JSON report the provider reads. The
 // document also names the user who ran the scan, so nothing else is kept.
 type wizcliScan struct {
-	ID     string `json:"id"`
-	Status struct {
+	ID        string `json:"id"`
+	ReportURL string `json:"reportUrl"`
+	Status    struct {
 		State   string `json:"state"`
 		Verdict string `json:"verdict"`
 	} `json:"status"`
@@ -182,12 +189,19 @@ func readWizcliScan(path string) (*wizcliScan, error) {
 // interpretWizcli maps a finished scan to an outcome. It fails closed: a
 // policy failure by exit code or by report verdict denies the image, and a
 // clean exit without a usable successful report is an error, not an allow.
-func interpretWizcli(exitCode int, reportPath, digest, output string) (Outcome, error) {
+func interpretWizcli(exitCode int, reportPath, digest, output string, publish bool) (Outcome, error) {
 	scan, scanErr := readWizcliScan(reportPath)
 	result := &apiv1.WizcliResult{Digest: digest}
 	if scan != nil {
 		result.ScanID = scan.ID
 		result.Verdict = scan.Status.Verdict
+		if publish {
+			u, err := url.Parse(scan.ReportURL)
+			if err == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil &&
+				!strings.ContainsAny(scan.ReportURL, "\r\n\t") {
+				result.ReportURL = scan.ReportURL
+			}
+		}
 		seen := map[string]struct{}{}
 		for _, match := range scan.Result.FailedPolicyMatches {
 			name := match.Policy.Name

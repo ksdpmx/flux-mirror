@@ -72,6 +72,24 @@ func TestProgressJobFinished(t *testing.T) {
 				"  └─ pre hook signature: deny (800ms)\n",
 		},
 		{
+			name: "published reports are shown for each platform",
+			res: syncpkg.JobResult{
+				Status: apiv1.StatusBlocked,
+				Reason: "vuln-scan",
+				Steps: []apiv1.StepResult{{
+					Name: "vuln-scan", Verdict: apiv1.StepVerdictDeny,
+					Units: []apiv1.UnitResult{
+						{Name: "linux/amd64", Wizcli: &apiv1.WizcliResult{ReportURL: "https://app.wiz.io/report/1"}},
+						{Name: "linux/arm64", Wizcli: &apiv1.WizcliResult{ReportURL: "https://app.wiz.io/report/2"}},
+					},
+				}},
+			},
+			want: "✗ alpine:3.20 (blocked by vuln-scan)\n" +
+				"  └─ pre hook vuln-scan: deny\n" +
+				"     linux/amd64 report: https://app.wiz.io/report/1\n" +
+				"     linux/arm64 report: https://app.wiz.io/report/2\n",
+		},
+		{
 			name: "blocked tag without step details names only the step",
 			res:  syncpkg.JobResult{Status: apiv1.StatusBlocked, Reason: "signature"},
 			want: "✗ alpine:3.20 (blocked by signature)\n",

@@ -65,8 +65,13 @@ func TestReport_Schema(t *testing.T) {
 					{
 						Tag: "v0.8.5", Status: apiv1.StatusBlocked, Digest: "sha256:def",
 						Steps: []apiv1.StepResult{{
-							Name: "signature", Provider: "cosign", Verdict: apiv1.StepVerdictDeny,
-							Reason: "signature policy", Attempts: 1, Duration: "250ms",
+							Name: "vuln-scan", Provider: "wizcli", Verdict: apiv1.StepVerdictDeny,
+							Reason: "policy failure", Attempts: 1, Duration: "250ms",
+							Units: []apiv1.UnitResult{{
+								Name: "linux/amd64", Verdict: apiv1.StepVerdictDeny,
+								Attempts: 1, Duration: "250ms",
+								Wizcli: &apiv1.WizcliResult{ReportURL: "https://app.wiz.io/reports/1"},
+							}},
 						}},
 					},
 					{Tag: "v0.8.0", Status: apiv1.StatusFailed, Error: "boom"},
@@ -87,5 +92,6 @@ func TestReport_Schema(t *testing.T) {
 
 	var buf bytes.Buffer
 	g.Expect(RenderReport(&buf, "json", report)).To(Succeed())
+	g.Expect(buf.String()).To(ContainSubstring(`"reportUrl": "https://app.wiz.io/reports/1"`))
 	validateReportSchema(t, buf.String())
 }
