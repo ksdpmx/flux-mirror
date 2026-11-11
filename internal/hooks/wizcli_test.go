@@ -148,7 +148,7 @@ func TestWizcliStep_AllPlatformsPass(t *testing.T) {
 		step.Wizcli.Policies = []string{"prod-vuln", "prod-secrets"}
 	})
 
-	result, err := runner.Run(context.Background(), Input{Source: "ghcr.io/example/image", Digest: "sha256:index"})
+	result, err := runner.Run(context.Background(), Input{Source: "ghcr.io:5000/example/image", Tag: "v1.2.3", Digest: "sha256:index"})
 	g.Expect(err).ToNot(HaveOccurred())
 	g.Expect(result.Terminal).To(BeNil())
 
@@ -161,11 +161,12 @@ func TestWizcliStep_AllPlatformsPass(t *testing.T) {
 	}))
 	g.Expect(step.Units[1].Wizcli.Digest).To(Equal("sha256:linux-arm64"))
 
-	g.Expect(saver.refs).To(ConsistOf("ghcr.io/example/image@sha256:index", "ghcr.io/example/image@sha256:index"))
+	g.Expect(saver.refs).To(ConsistOf("ghcr.io:5000/example/image@sha256:index", "ghcr.io:5000/example/image@sha256:index"))
 	calls := fake.calls(t)
 	g.Expect(calls).To(HaveLen(2))
 	for _, call := range calls {
 		g.Expect(call).To(ContainSubstring("scan container-image"))
+		g.Expect(call).To(ContainSubstring("--name ghcr.io:5000/example/image:v1.2.3"))
 		g.Expect(call).To(ContainSubstring("--no-publish"))
 		g.Expect(call).To(ContainSubstring("--policies prod-vuln,prod-secrets"))
 		g.Expect(call).ToNot(ContainSubstring("--projects"))
@@ -298,16 +299,16 @@ func TestWizcliArguments_Timeout(t *testing.T) {
 	g := NewWithT(t)
 	step := wizcliStep{}
 
-	g.Expect(step.arguments(context.Background(), "image.tar", "scan.json")).ToNot(ContainElement("--timeout"))
+	g.Expect(step.arguments(context.Background(), "image.tar", "scan.json", "example/image:v1")).ToNot(ContainElement("--timeout"))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	args := step.arguments(ctx, "image.tar", "scan.json")
+	args := step.arguments(ctx, "image.tar", "scan.json", "example/image:v1")
 	g.Expect(args).To(ContainElement("--timeout"))
 
 	short, cancelShort := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelShort()
-	g.Expect(step.arguments(short, "image.tar", "scan.json")).ToNot(ContainElement("--timeout"))
+	g.Expect(step.arguments(short, "image.tar", "scan.json", "example/image:v1")).ToNot(ContainElement("--timeout"))
 }
 
 func TestInterpretWizcli(t *testing.T) {

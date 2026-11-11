@@ -491,7 +491,8 @@ each platform flux-mirror pulls the image at the digest resolved for the tag
 into a temporary tarball, scans it, and removes it. Plan for the extra pull and
 for temporary disk space (set `TMPDIR` to a volume with enough room) for
 `concurrency` tarballs at a time. The scan runs against the pinned digest that
-the copy then uses.
+the copy then uses. Each platform scan is named with the source image and tag
+(`source:tag`) instead of the temporary tarball path.
 
 An exit code `0` with a successful report allows the tag, and exit code `4`
 (`FAILED_BY_POLICY`) denies it, with the failed policy names in the report. Any

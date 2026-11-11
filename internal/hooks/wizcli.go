@@ -116,7 +116,7 @@ func (s wizcliStep) scan(ctx context.Context, input Input, platform string) (Out
 		return Outcome{}, err
 	}
 
-	cmd := exec.CommandContext(ctx, s.binary, s.arguments(ctx, imagePath, reportPath)...)
+	cmd := exec.CommandContext(ctx, s.binary, s.arguments(ctx, imagePath, reportPath, input.Source+":"+input.Tag)...)
 	var output tailBuffer
 	output.limit = wizcliOutputTail
 	cmd.Stdout = &output
@@ -136,11 +136,12 @@ func (s wizcliStep) scan(ctx context.Context, input Input, platform string) (Out
 	return interpretWizcli(exitCode, reportPath, digest, output.String(), s.publish)
 }
 
-func (s wizcliStep) arguments(ctx context.Context, imagePath, reportPath string) []string {
+func (s wizcliStep) arguments(ctx context.Context, imagePath, reportPath, scanName string) []string {
 	args := []string{
 		"scan", "container-image", imagePath,
 		"--no-color", "--no-style", "--no-telemetry",
 		"--json-output-file", reportPath,
+		"--name", scanName,
 	}
 	if !s.publish {
 		args = append(args, "--no-publish")
